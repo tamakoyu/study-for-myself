@@ -1,6 +1,9 @@
 /**
  * test/e2e.mjs —— 用无头 Edge 真实点一遍界面（零第三方依赖）
  *
+ * ⚠️ 这个测试是「有状态」的：它会打卡、建题、改计划。**每跑一次都要先把副本重新复制一份**，
+ *    否则第二次跑必然失败（数据已经变了）。
+ *
  * 必须先起一个指向「副本」的测试服务，绝不测真数据：
  *   cp -R 错题本 /tmp/notebook-test
  *   NOTEBOOK_DIR=/tmp/notebook-test NOTEBOOK_PORT=4199 node server.mjs --no-open &
@@ -118,7 +121,8 @@ await s.send('Page.enable');
 console.log(`\n=== 错题本 · 浏览器端到端测试（${APP}）===\n`);
 
 /* ---------- 0. 今日首页 ---------- */
-await s.js(`location.replace(${JSON.stringify(APP + '/#today')});`);
+// 加时间戳强制整页重载，否则只换 hash 会带上一次运行残留的状态
+await s.js(`location.replace(${JSON.stringify(APP + '/?t=')} + Date.now() + '#today');`);
 await sleep(2000);
 await s.waitFor('.countdown-card');
 const cdDays = await s.js(`return document.querySelector('.cd-days')?.textContent.trim() || '';`);
@@ -136,6 +140,19 @@ check(
 );
 const dayCells = await s.js(`return document.querySelectorAll('.day-cell').length;`);
 check('今日：本周 7 天进度条', dayCells === 7, `${dayCells} 格`);
+const weeklyBox = await s.js(
+  `var p=document.querySelector('.weekly'); return p ? p.querySelector('.panel-head h3').textContent.trim() : '';`
+);
+check('今日：有「本周状态与建议」面板', weeklyBox.includes('本周状态与建议'), weeklyBox || '(没有)');
+check('今日：有生成提示词按钮', (await s.js(`return !!document.querySelector('[data-weekly-prompt]');`)) === true);
+const weekly = await api2('/api/weekly');
+check(
+  '本周总结：提示词带上了计划、复盘与错题数据',
+  weekly.prompt.includes('本周事实') && weekly.prompt.includes('这一周的每日复盘') && weekly.prompt.includes('错题情况') &&
+    weekly.prompt.includes('本周状态与建议'),
+  `${weekly.prompt.length} 字，收集 ${weekly.reviewCount} 篇复盘`
+);
+
 const todayStats = await s.js(`return [...document.querySelectorAll('.stat-card .stat-label')].map(x=>x.textContent.trim()).join(' | ');`);
 check(
   '今日：四张统计卡（今日完成 / 本周 / 错题 / 连续打卡）',
@@ -175,6 +192,11 @@ const planGroups = await s.js(`return document.querySelectorAll('.plan-group').l
 check('计划：详情按科目分组渲染', planGroups >= 3, `${planGroups} 组`);
 const planBoxes = await s.js(`return document.querySelectorAll('.plan-body input[data-task]').length;`);
 check('计划：渲染出可勾选的任务', planBoxes >= 5, `${planBoxes} 个复选框`);
+const monthOrder = await s.js(
+  `return [...document.querySelectorAll('.plan-month .pm-head span')].map(x=>x.textContent.trim());`
+);
+const curMonth = new Date().toISOString().slice(0, 7);
+check('计划：当月排在最前面', monthOrder[0] === curMonth, monthOrder.slice(0, 4).join(' → '));
 await s.shot('16-plan');
 
 /* ---------- 0.7 复盘页 ---------- */
@@ -206,7 +228,18 @@ await s.js(`document.querySelector('[data-journal-move="0"]').click();`);
 await sleep(1400);
 const backToday = await s.js(`return document.getElementById('journalDate').value;`);
 check('复盘：能一键回今天', backToday === beforeDate, backToday);
-check('复盘：左侧历史列表可点', (await s.js(`return document.querySelectorAll('.j-list [data-journal]').length;`)) >= 1);
+const jItems = await s.js(`return document.querySelectorAll('.j-item[data-journal]').length;`);
+check('复盘：左侧历史按月份平铺', jItems >= 5 && (await s.js(`return document.querySelectorAll('.j-month').length;`)) >= 1, `${jItems} 篇`);
+const jMonths = await s.js(`return [...document.querySelectorAll('.j-month .pm-head span')].map(x=>x.textContent.trim()).join(' / ');`);
+check('复盘：按月份分组', /\d{4}-\d{2}/.test(jMonths), jMonths);
+// 直接点历史里的一天
+const firstItem = await s.js(
+  `var b=document.querySelector('.j-item[data-journal]'); return b ? b.dataset.journal : '';`
+);
+await s.js(`document.querySelector('.j-item[data-journal]').click();`);
+await sleep(1600);
+const afterClick = await s.js(`return document.getElementById('journalDate').value;`);
+check('复盘：直接点历史条目就能切过去', afterClick === firstItem, `${afterClick}（点了 ${firstItem}）`);
 
 /* ---------- 1. 错题模块：先造一道「遗忘曲线到期」的题 ---------- */
 // 用 3 天前做「完美」的方式，让间隔 1 天的排期立刻到期（不依赖外部预置数据）

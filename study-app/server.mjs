@@ -24,6 +24,7 @@ import { chapterOptions } from './lib/create.mjs';
 import { scanPlans, toggleTask } from './lib/plans.mjs';
 import { readReview, writeReview, listReviews } from './lib/reviews.mjs';
 import { buildToday, plansCached } from './lib/today.mjs';
+import { buildWeekly } from './lib/weekly.mjs';
 import { RESULTS } from './lib/parse.mjs';
 
 const PUBLIC_DIR = path.join(APP_DIR, 'public');
@@ -236,6 +237,11 @@ async function main() {
       /* ---- study：今日 / 计划 / 笔记 / 复盘 ---- */
       if (p === '/api/today' && req.method === 'GET') {
         sendJson(res, 200, buildToday(cfg, snapshot(cfg).stats));
+        return;
+      }
+
+      if (p === '/api/weekly' && req.method === 'GET') {
+        sendJson(res, 200, buildWeekly(cfg, snapshot(cfg).stats));
         return;
       }
 

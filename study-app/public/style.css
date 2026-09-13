@@ -1234,3 +1234,27 @@ html[data-theme="light"] .date-input { color-scheme: light; }
   background: var(--accent-soft); color: var(--accent);
   font-size: 10.5px; font-weight: 620; letter-spacing: .04em;
 }
+
+/* 本周状态总结 */
+.weekly { border-color: color-mix(in srgb, var(--accent) 26%, var(--border-soft)); }
+.weekly-body { font-size: 14px; line-height: 1.85; }
+.weekly-body h3 { font-size: 14.5px; margin: 14px 0 6px; color: var(--accent); }
+.weekly-body ul { margin: 6px 0; padding-left: 20px; }
+.weekly-body li { margin: 4px 0; }
+.weekly-body strong { color: var(--text); }
+
+/* 复盘列表：平铺 + 按月 */
+.j-months { display: flex; flex-direction: column; gap: 16px; }
+.j-month .pm-head { margin-bottom: 4px; }
+.j-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left;
+  padding: 6px 10px; border-radius: 8px;
+  border: 1px solid transparent; background: none;
+  color: var(--text-2); font-size: 13px; transition: .12s;
+}
+.j-item:hover { background: var(--surface-2); color: var(--text); }
+.j-item.is-on { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.ji-day { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ji-week { font-size: 11.5px; color: var(--text-3); }
+.ji-flag { margin-left: auto; font-size: 8px; color: var(--done); }

@@ -33,6 +33,7 @@ const state = {
   add: { raw: '', mode: 'rule', items: null, busy: false, uploads: [] },
   // study 各模块的数据
   today: null,
+  weekly: null,
   plans: null,
   planDetail: null,
   notesTree: null,
@@ -1750,9 +1751,18 @@ function withOcc(list) {
   });
 }
 
+async function loadWeekly() {
+  try {
+    state.weekly = await api('/api/weekly');
+  } catch {
+    state.weekly = null;
+  }
+}
+
 async function loadToday() {
   try {
     state.today = await api('/api/today');
+    await loadWeekly();
   } catch (err) {
     state.today = null;
     toast(`读取今日数据失败：${err.message}`, 'err');
@@ -1872,6 +1882,8 @@ function renderToday() {
       </div>
     </div>
 
+    ${weeklyPanel()}
+
     <section class="panel" style="margin-top:14px">
       <div class="panel-head"><h3>本周剩余</h3><span class="hint">还没勾掉的</span></div>
       <div class="panel-body">
@@ -1883,6 +1895,37 @@ function renderToday() {
       </div>
     </section>
   </div>`;
+}
+
+/** 本周状态总结：程序不下结论，生成提示词交给 AI，写完再显示在这里 */
+function weeklyPanel() {
+  const w = state.weekly;
+  if (!w) return '';
+  const meta = w.week
+    ? `${esc(w.week.range.start)} ~ ${esc(w.week.range.end)}　·　完成 ${w.week.done}/${w.week.total}（${w.week.rate}%）　·　复盘 ${w.reviewCount} 篇`
+    : '';
+
+  return `<section class="panel weekly" style="margin-top:14px">
+    <div class="panel-head">
+      <h3>🧭 本周状态与建议</h3>
+      <span class="hint">${meta}</span>
+    </div>
+    <div class="panel-body">
+      ${
+        w.summary
+          ? `<div class="md-doc weekly-body">${mdToHtml(w.summary.body)}</div>
+             <div class="rv-start-row">
+               <button class="btn-ghost small" data-weekly-prompt="1">🔄 重新生成提示词（覆盖这节）</button>
+               <span class="rv-hint">写在 <code>${esc(w.week ? w.week.rel : '')}</code> 的「🤖 本周状态与建议」一节</span>
+             </div>`
+          : `<div class="rv-hint" style="margin-bottom:12px">
+               程序自己不下结论。点下面的按钮生成提示词，复制发给我 ——
+               我会读这一周的计划完成情况、每日复盘和错题数据，写好总结与下周建议，再写回你的周计划文件。
+             </div>
+             <button class="btn-primary" data-weekly-prompt="1">📋 生成本周状态总结提示词</button>`
+      }
+    </div>
+  </section>`;
 }
 
 /* ---------------- 计划 ---------------- */
@@ -1904,6 +1947,18 @@ async function loadPlanDetail(rel) {
   }
 }
 
+/** 当月排最前，其后的月份顺序往后，已经过去的月份倒序放最后 */
+function sortMonths(months) {
+  const cur = new Date().toISOString().slice(0, 7);
+  const rank = (m) => (m === cur ? 0 : m > cur ? 1 : 2);
+  return [...months].sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    return ra === 2 ? b.localeCompare(a) : a.localeCompare(b);
+  });
+}
+
 function renderPlan() {
   const list = state.plans?.plans || [];
   const months = [...new Set(list.filter((p) => p.kind === 'month').map((p) => p.month))].sort();
@@ -1911,9 +1966,7 @@ function renderPlan() {
 
   const side = !list.length
     ? '<div class="rv-hint">还没扫到计划。确认 config.json 里的 planDir 指向 考研/。</div>'
-    : `<div class="plan-months">${[...new Set(list.filter((p) => p.kind === 'week').map((p) => p.month))]
-        .sort()
-        .reverse()
+    : `<div class="plan-months">${sortMonths([...new Set(list.filter((p) => p.kind === 'week').map((p) => p.month))])
         .map((mo) => {
           const weeks = list.filter((p) => p.kind === 'week' && p.month === mo);
           const mp = list.find((p) => p.kind === 'month' && p.month === mo);
@@ -2002,14 +2055,36 @@ function renderJournal() {
   const list = state.journals?.reviews || [];
   if (!j) return '<div class="loading"><div class="spinner"></div><p>正在读取复盘…</p></div>';
 
+  // 平铺 + 按月份分组
+  const byMonth = new Map();
+  for (const r of list) {
+    const key = r.month || '其他';
+    if (!byMonth.has(key)) byMonth.set(key, []);
+    byMonth.get(key).push(r);
+  }
+  const months = [...byMonth.keys()].sort((a, b) => (a < b ? 1 : -1));
   const history = list.length
-    ? `<div class="j-list">${list
-        .slice(0, 60)
+    ? `<div class="j-months">${months
         .map(
-          (r) => `<button class="plan-link${r.date === j.date ? ' is-on' : ''}" data-journal="${esc(r.date || '')}">
-        <span class="pl-name">${esc(r.name.replace(/复盘\.md$/, ''))}</span>
-        <span class="pl-rate">${r.date ? '' : '·'}</span>
-      </button>`
+          (mo) => `<div class="j-month">
+        <div class="pm-head"><span>${esc(mo)}</span><b>${byMonth.get(mo).length} 篇</b></div>
+        ${byMonth
+          .get(mo)
+          .map((r) => {
+            if (!r.date) {
+              return `<button class="j-item" data-journal-open="${esc(r.rel)}">
+                <span class="ji-day">${esc(r.name.replace(/复盘\.md$/, ''))}</span>
+                <span class="ji-week">${esc(r.week || '')}</span>
+              </button>`;
+            }
+            return `<button class="j-item${r.date === j.date ? ' is-on' : ''}" data-journal="${esc(r.date)}">
+              <span class="ji-day">${esc(r.date.slice(5).replace('-', '.'))}</span>
+              <span class="ji-week">${esc(r.week || '')}</span>
+              <span class="ji-flag">${r.empty ? '' : '●'}</span>
+            </button>`;
+          })
+          .join('')}
+      </div>`
         )
         .join('')}</div>`
     : '<div class="rv-hint">还没有复盘记录。</div>';
@@ -2043,12 +2118,30 @@ function renderJournal() {
   </div>`;
 }
 
+/** 非标准命名的复盘（比如 9月第一周复盘.md）：只能直接打开看 */
+async function openJournalFile(rel) {
+  try {
+    const out = await api(`/api/note?rel=${encodeURIComponent(rel)}`);
+    state.journal = { date: rel, rel, exists: true, content: out.content, week: null, raw: true };
+    render();
+  } catch {
+    toast('这篇不在程序能读的范围里，去 Obsidian 看吧', 'err');
+  }
+}
+
 /** 日期加减天数；n=0 表示回到今天 */
 function shiftDate(date, n) {
   const base = n === 0 || !date ? new Date() : new Date(`${date}T00:00:00`);
   if (n !== 0) base.setDate(base.getDate() + n);
   const p = (x) => String(x).padStart(2, '0');
   return `${base.getFullYear()}-${p(base.getMonth() + 1)}-${p(base.getDate())}`;
+}
+
+async function copyWeeklyPrompt() {
+  const w = state.weekly;
+  if (!w || !w.prompt) return toast('还没找到本周计划', 'err');
+  await copyText(w.prompt);
+  toast('提示词已复制 —— 粘给我，我读完就把总结写进周计划', 'ok');
 }
 
 async function saveJournal() {
@@ -2500,8 +2593,12 @@ function bindEvents() {
       if (v === 'mistakes') return go({ module: 'mistakes', sub: 'dashboard' });
       return go({ module: v });
     }
+    if (e.target.closest('[data-weekly-prompt]')) return copyWeeklyPrompt();
+
     const planBtn = e.target.closest('[data-plan]');
     if (planBtn) return go({ module: 'plan', rel: planBtn.dataset.plan });
+    const jOpen = e.target.closest('[data-journal-open]');
+    if (jOpen) return openJournalFile(jOpen.dataset.journalOpen);
     const jBtn = e.target.closest('[data-journal]');
     if (jBtn && jBtn.dataset.journal) return go({ module: 'journal', date: jBtn.dataset.journal });
     if (e.target.closest('[data-journal-save]')) return saveJournal();

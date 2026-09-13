@@ -93,18 +93,32 @@ export function listReviews(reviewDir, vaultDir) {
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) walk(abs, depth + 1);
       else if (e.name.endsWith('.md')) {
+        // 文件名形如 9.7复盘.md：m[1] 是月、m[2] 是日（别弄反）
         const m = e.name.match(/^(\d{1,2})\.(\d{1,2})复盘\.md$/);
         const st = fs.statSync(abs);
         let date = null;
+        let month = null;
+        let week = null;
         if (m) {
           const rel = path.relative(reviewDir, abs).split(path.sep);
           const ym = (rel[0] || '').match(/^(\d{2})\.(\d{1,2})$/);
-          if (ym) date = `20${ym[1]}-${pad2(Number(ym[2]))}-${pad2(Number(m[1]))}`;
+          week = rel[1] || null;
+          if (ym) {
+            // 年份取自目录（26 → 2026），月日以文件名为准
+            // （第一周里会有 8.31 这种上个月最后一天）
+            const year = `20${ym[1]}`;
+            month = `${year}-${pad2(Number(m[1]))}`;
+            date = `${month}-${pad2(Number(m[2]))}`;
+          }
         }
+        const body = readText(abs);
         out.push({
           rel: path.relative(vaultDir, abs).split(path.sep).join('/'),
           name: e.name,
           date,
+          month,
+          week,
+          empty: body.trim().length < 40,
           size: st.size,
           mtime: st.mtimeMs,
         });
