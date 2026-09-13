@@ -15,16 +15,6 @@
         <span class="brand-text">study</span>
       </div>
 
-      <div class="scope-picker" id="scopePicker">
-        <button class="scope-btn" id="scopeBtn" aria-haspopup="true" aria-expanded="false" title="切换要看的错题本范围">
-          <span class="scope-icon" id="scopeIcon">🎲</span>
-          <span class="scope-text" id="scopeText">全部错题</span>
-          <span class="scope-cnt" id="scopeCnt"></span>
-          <span class="caret">▾</span>
-        </button>
-        <div class="scope-menu" id="scopeMenu" hidden></div>
-      </div>
-
       <nav class="tabs" id="tabs">
         <button class="tab is-active" data-module="today">今日</button>
         <button class="tab" data-module="mistakes">错题</button>
@@ -33,6 +23,16 @@
         <button class="tab" data-module="plan">计划</button>
         <button class="tab" data-module="journal">复盘</button>
       </nav>
+
+      <div class="scope-picker" id="scopePicker">
+        <button class="scope-btn" id="scopeBtn" aria-haspopup="true" aria-expanded="false" title="切换当前要看的范围">
+          <span class="scope-icon" id="scopeIcon">🎲</span>
+          <span class="scope-text" id="scopeText">全部错题</span>
+          <span class="scope-cnt" id="scopeCnt"></span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="scope-menu" id="scopeMenu" hidden></div>
+      </div>
 
       <div class="topbar-tools">
         <label class="search">

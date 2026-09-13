@@ -1,6 +1,9 @@
 {
   "vaultDir": "..",
   "notebookDir": "错题本",
+  "goodDir": "好题本",
+  "patternDir": "题型本",
+  "noteDirs": ["高等数学", "高数上知识前探", "数据结构", "费曼自测清单", "公式本"],
   "planDir": "考研",
   "reviewDir": "复盘",
   "examDate": "2027-12-18",

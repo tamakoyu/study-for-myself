@@ -246,10 +246,101 @@ await s.js(`document.querySelector('.tab[data-module="good"]').click();`);
 await sleep(1800);
 const goodTabs = await s.js(`return [...document.querySelectorAll('.tab')].map(x=>x.textContent.trim()).join('/');`);
 check('顶栏：好题与题型模块已加入', goodTabs.includes('好题') && goodTabs.includes('题型'), goodTabs);
+const barOrder = await s.js(
+  `var bar=document.querySelector('.topbar');
+   var kids=[...bar.children].map(x=>x.className.split(' ')[0]);
+   var tabs=bar.querySelector('#tabs'), picker=bar.querySelector('#scopePicker');
+   return JSON.stringify({kids, tabsBeforePicker: !!(tabs.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING)});`
+);
+const barInfo = JSON.parse(barOrder);
+check(
+  '顶栏：范围/题本按钮挪到了「复盘」右边（导航之后）',
+  barInfo.tabsBeforePicker === true && barInfo.kids.indexOf('tabs') < barInfo.kids.indexOf('scope-picker'),
+  barInfo.kids.join(' | ')
+);
 const goodSubs = await s.js(`return [...document.querySelectorAll('.subtab')].map(x=>x.textContent.trim()).join('/');`);
 check('好题本：与错题本同一套子页面', goodSubs === '总览/题库/复习/增题', goodSubs);
-check('好题本：目前为空（还没有好题）', (await s.js(`return !!document.querySelector('.empty-row, .category-grid, .problem-card');`)) === true);
+const goodTotal = await s.js(`return document.querySelector('.stat-card .stat-value')?.textContent.trim();`);
+check('好题本：统计是独立的（好题为 0，不显示错题的 10）', goodTotal === '0', `总览显示 ${goodTotal} 题`);
+
+// 题库可以共通，但要能分清哪本
+await s.js(`document.querySelector('.subtab[data-sub="library"]').click();`);
+await sleep(1500);
+const kindChips = await s.js(
+  `return [...document.querySelectorAll('[data-filter="kind"]')].map(x=>x.textContent.trim()).join(' | ');`
+);
+check('好题本·题库：有「哪一本」筛选', kindChips.includes('当前') && kindChips.includes('全部'), kindChips);
+check('好题本·题库：默认只看好题（0 张）', (await s.js(`return document.querySelectorAll('.problem-card').length;`)) === 0);
+await s.js(`[...document.querySelectorAll('[data-filter="kind"]')].find(x=>x.dataset.value==='all').click();`);
+await sleep(1200);
+const commonCards = await s.js(`return document.querySelectorAll('.problem-card').length;`);
+const kindTags = await s.js(`return document.querySelectorAll('.kind-tag').length;`);
+check('好题本·题库：切「全部」能看到两本书并标出来源', commonCards === 10 && kindTags === 10, `${commonCards} 张，${kindTags} 个来源标签`);
+
+// 好题页里点东西不应该跳回错题
+await s.js(`document.querySelector('.subtab[data-sub="dashboard"]').click();`);
+await sleep(1200);
+const stillGood = await s.js(`return location.hash.startsWith('#good')`);
+check('好题本：点来点去不会跳回错题页', stillGood === true, await s.js(`return location.hash`));
 await s.shot('19-good');
+
+// 增题页必须整个跟着「当前在哪一本」走：标题、错因字段、提示词里的落盘目录
+await s.js(`document.querySelector('.subtab[data-sub="add"]').click();`);
+await sleep(1600);
+const addTitle = await s.js(`return document.querySelector('.rv-setup-head h2')?.textContent.trim() || '';`);
+check('好题本·增题：标题是「加新好题」', addTitle === '加新好题', addTitle);
+check(
+  '好题本·增题：没有错因字段（好题不归因）',
+  (await s.js(`return !!document.querySelector('.ai-fields [data-field="reason"]');`)) === false &&
+    (await s.js(`return !!document.querySelector('#imageReason');`)) === false
+);
+const addCreateBtn = await s.js(`return document.querySelector('[data-add="create"]')?.textContent.trim() || '';`);
+check('好题本·增题：按钮写的是「写入好题本」', addCreateBtn.includes('好题本'), addCreateBtn);
+const goodPrompt = await api2('/api/prompt', {
+  method: 'POST',
+  body: JSON.stringify({ stems: ['求极限 test'], book: 'good', category: '数学', subject: '高数', chapter: '极限' }),
+});
+check(
+  '好题本·增题：提示词写进「好题本/」而不是「错题本/」',
+  goodPrompt.prompt.includes('好题本/<大类>') &&
+    !goodPrompt.prompt.includes('错题本/<大类>') &&
+    goodPrompt.prompt.includes('不要写 `## 错因分析` 区块'),
+  `${goodPrompt.prompt.length} 字，book=${goodPrompt.book}`
+);
+check(
+  '好题本·增题：提示词里带上了「自动归类到题型本」的要求',
+  goodPrompt.prompt.includes('归类到「题型本」') && goodPrompt.prompt.includes('good:<文件名去掉.md>'),
+  `通解 ${goodPrompt.patternCount} 份`
+);
+// 编号只看自己这一本
+const goodDetect = await api2('/api/detect', {
+  method: 'POST',
+  body: JSON.stringify({ raw: '求极限 $\\lim_{x\\to0}\\frac{\\sin x}{x}$', book: 'good' }),
+});
+const badDetect = await api2('/api/detect', {
+  method: 'POST',
+  body: JSON.stringify({ raw: '求极限 $\\lim_{x\\to0}\\frac{\\sin x}{x}$', book: 'mistakes' }),
+});
+check(
+  '好题本·增题：编号按好题本单独排（两本互不干扰）',
+  goodDetect.items[0]?.num === 1 && badDetect.items[0]?.num === 9,
+  `好题本 #${goodDetect.items[0]?.num} ／ 错题本 #${badDetect.items[0]?.num}`
+);
+await s.shot('19b-good-add');
+
+// 复习页的范围筹码也要只数当前这本
+await s.js(`document.querySelector('.subtab[data-sub="drill"]').click();`);
+await sleep(1600);
+const mixChip = await s.js(
+  `return [...document.querySelectorAll('.chip')].find(x=>x.textContent.includes('全部混刷'))?.textContent.replace(/\\s+/g,' ').trim() || '';`
+);
+check('好题本·复习：「全部混刷」数的是好题本的题，不是错题本的 10 题', mixChip.includes('0') && !mixChip.includes('10'), mixChip);
+
+// 回错题页做后面的测试（切书会保留子页面，所以显式回到总览）
+await s.js(`document.querySelector('.tab[data-module="mistakes"]').click();`);
+await sleep(1200);
+await s.js(`document.querySelector('.subtab[data-sub="dashboard"]').click();`);
+await sleep(1500);
 
 /* ---------- 0.9 题型大全 ---------- */
 await s.js(`document.querySelector('.tab[data-module="patterns"]').click();`);
@@ -261,15 +352,27 @@ const ptStats = await s.js(
   `return [...document.querySelectorAll('.pattern-head .stat-label')].map(x=>x.textContent.trim()).join('/');`
 );
 check('题型：四张统计卡（题型数/掌握度/已归类/未归类）', ptStats.includes('题型数') && ptStats.includes('平均掌握度'), ptStats);
-// 展开一个通解看关联题目
-await s.js(`document.querySelector('[data-pattern-toggle]').click();`);
-await sleep(800);
-const relChips = await s.js(`return document.querySelectorAll('.rel-chip').length;`);
-check('题型：展开后能看到关联的错题/好题', relChips >= 1, `${relChips} 道关联题目`);
-const hasSteps = await s.js(`return (document.querySelector('.pp-body')?.textContent || '').includes('通解步骤');`);
-check('题型：通解正文（适用特征/步骤/易错点）已渲染', hasSteps === true);
-check('题型：题目已全部归类，生成按钮转为禁用', (await s.js(`return document.querySelector('[data-pattern-prompt]').disabled;`)) === true);
+check('题型：归类按钮已移除', (await s.js(`return !!document.querySelector('[data-pattern-prompt]');`)) === false);
+// 点开进入大屏
+const firstTitle = await s.js(`return document.querySelector('.pattern-card h3').textContent.trim();`);
+await s.js(`document.querySelector('[data-pattern-open]').click();`);
+await sleep(1400);
+check('题型：点击进入大屏（不是下拉）', (await s.js(`return !!document.querySelector('.pattern-screen');`)) === true, firstTitle);
+const scrTitle = await s.js(`return document.querySelector('.pattern-screen .rv-num')?.textContent.trim() || '';`);
+check('题型：大屏显示的是同一个题型', scrTitle === firstTitle, scrTitle);
+const bodyText = await s.js(`return document.querySelector('.pattern-screen .rv-stem')?.textContent || '';`);
+check('题型：大屏有适用特征/通解步骤/易错点', bodyText.includes('适用特征') && bodyText.includes('通解步骤') && bodyText.includes('易错点'));
+const relChips = await s.js(`return document.querySelectorAll('.pattern-screen .rel-chip').length;`);
+check('题型：大屏列出关联的错题/好题', relChips >= 1, `${relChips} 道`);
 await s.shot('20-patterns');
+// 看原文
+await s.js(`document.querySelector('.pattern-screen [data-doc-open]').click();`);
+await sleep(1500);
+check('原文：能从题型跳到源文件原文', (await s.js(`return !!document.querySelector('.doc-screen');`)) === true);
+check('原文：渲染出了正文', (await s.js(`return (document.querySelector('.doc-screen .note-body')?.textContent || '').length;`)) > 100);
+await s.shot('21-doc');
+await s.js(`document.querySelector('[data-doc-back]').click();`);
+await sleep(1200);
 const pt = await api2('/api/patterns');
 check(
   '题型：每道题都归到了某个通解',
@@ -283,6 +386,122 @@ check(
   `${ptPrompt.prompt.length} 字`
 );
 
+/* ---------- 0.95 好题本：真的有一道好题以后的行为 ---------- */
+const goodCreated = await api2('/api/new', {
+  method: 'POST',
+  body: JSON.stringify({
+    book: 'good',
+    items: [
+      {
+        category: '数学',
+        subject: '高数',
+        chapter: '极限',
+        num: 1,
+        slug: 'E2E好题样本',
+        type: '计算题',
+        difficulty: 2,
+        heat: 4,
+        stem: '求极限 $\\lim\\limits_{x\\to0}\\dfrac{\\sin x}{x}$',
+      },
+    ],
+  }),
+});
+check(
+  '好题本：新题落盘在「好题本/」而不是「错题本/」',
+  !!goodCreated.created?.[0] && goodCreated.created[0].file.startsWith('数学/'),
+  goodCreated.created?.[0]?.absPath || JSON.stringify(goodCreated)
+);
+const goodFile = (await (await fetch(`${APP}/api/questions`)).json()).problems.find((x) => x.kind === 'good');
+check('好题本：能被解析出来，且 kind=good', !!goodFile && goodFile.kind === 'good', goodFile?.id);
+
+// 换书要收回「全部（共通）」筛选（否则好题页又会看到一堆错题）
+// 整页重载一次：新题是程序外写进仓库的，重新扫盘才看得到
+await s.js(`location.replace(location.origin + location.pathname + '?t=' + Date.now() + '#mistakes/library');`);
+await sleep(2600);
+await s.js(
+  `[...document.querySelectorAll('[data-filter="kind"]')].find(x=>x.dataset.value==='all')?.click();`
+);
+await sleep(1200);
+const kindInMistakes = await s.js(
+  `return document.querySelector('[data-filter="kind"].is-on')?.dataset.value || '(无)';`
+);
+await s.js(`location.hash = '#good/library';`);
+await sleep(1800);
+const kindAfterSwitch = await s.js(
+  `return document.querySelector('[data-filter="kind"].is-on')?.dataset.value || '(无)';`
+);
+check(
+  '好题本·题库：换书后「哪一本」收回当前这本，不会残留「全部」',
+  kindInMistakes === 'all' && kindAfterSwitch === 'current',
+  `${kindInMistakes} → ${kindAfterSwitch}`
+);
+
+// 好题本自己的题库：默认只列好题
+await sleep(600);
+const goodCards = await s.js(`return document.querySelectorAll('.problem-card').length;`);
+check('好题本·题库：只列好题本自己的题，不再混进错题', goodCards === 1, `${goodCards} 张`);
+const goodWhere = await s.js(`return document.querySelector('.pc-where')?.textContent.trim() || '';`);
+check('好题本·题库：来源标签没被误标成错题', !goodWhere.includes('错题'), goodWhere);
+
+// 全屏做题 + 键盘快捷键（以前只有错题页能用）
+await s.js(`document.querySelector('.problem-card').click();`);
+await sleep(900);
+await s.js(`document.querySelector('#drawerPanel [data-solve-start]').click();`);
+await sleep(1300);
+check('好题本：能进全屏做题模式', await s.js(`return location.hash.startsWith('#good/solve')`), await s.js(`return location.hash`));
+await s.js(`document.dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true}));`);
+await sleep(600);
+check(
+  '好题本：空格也能显示答案（快捷键不再只在错题页生效）',
+  (await s.js(`return !!document.querySelector('.rv-revealed');`)) === true
+);
+await s.js(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'1',bubbles:true}));`);
+await sleep(1600);
+check('好题本：数字键 1 能记录「完美」', (await s.js(`return !!document.querySelector('.toast');`)) === true);
+await s.js(`location.hash = '#good/library';`);
+await sleep(1500);
+
+// 抽屉里的「本题原文」要真的能打开（以前用的是相对书目录的路径，会 403）
+await s.js(`document.querySelector('.problem-card').click();`);
+await sleep(900);
+await s.js(`document.querySelector('#drawerPanel [data-doc-open]').click();`);
+await sleep(1800);
+check('原文：抽屉里的「本题原文」真的能打开', (await s.js(`return !!document.querySelector('.doc-screen');`)) === true);
+const drawerDocRel = await s.js(`return document.querySelector('.doc-screen .rv-where code')?.textContent.trim() || '';`);
+check('原文：打开的是仓库里的那道题（好题本/…）', drawerDocRel.startsWith('好题本/'), drawerDocRel);
+check(
+  '原文：题目正文渲染出来（题干/答案都在）',
+  (await s.js(`return document.querySelector('.doc-screen .note-body')?.textContent || '';`)).includes('题干')
+);
+await s.shot('23-good-doc');
+await s.js(`document.querySelector('[data-doc-back]').click();`);
+await sleep(1300);
+
+/* ---------- 0.97 原文页：图片与双链（Obsidian 笔记原样渲染） ---------- */
+await s.js(`location.hash = '#doc/' + encodeURIComponent('高等数学/函数极限与连续/02-函数的图像.md');`);
+await sleep(2200);
+const docImgs = await s.js(`return document.querySelectorAll('.doc-screen .note-body img.md-img').length;`);
+check('原文：笔记里的 ![[图片]] 渲染出来了', docImgs >= 3, `${docImgs} 张`);
+// 图片是懒加载的，只检查首屏那一张
+const docImgsOk = await s.js(
+  `var i=document.querySelector('.doc-screen .note-body img.md-img'); return !!i && i.complete && i.naturalWidth>0;`
+);
+check('原文：图片真的加载出来了（走 /api/asset）', docImgsOk === true);
+const docLinks = await s.js(`return document.querySelectorAll('.doc-screen .note-body .wikilink').length;`);
+check('原文：笔记里的 [[双链]] 变成了可点的链接', docLinks >= 1, `${docLinks} 个`);
+// 点双链 → 应该在程序里跳到那篇笔记
+await s.js(`document.querySelector('.doc-screen .note-body .wikilink').click();`);
+await sleep(2000);
+const jumpedRel = await s.js(`return document.querySelector('.doc-screen .rv-where code')?.textContent.trim() || '';`);
+check('原文：点双链能直接跳到那篇笔记', jumpedRel.endsWith('.md') && jumpedRel !== '高等数学/函数极限与连续/02-函数的图像.md', jumpedRel);
+await s.shot('24-doc-note');
+// 源码视图
+await s.js(`document.querySelector('.doc-screen [data-doc-raw]').click();`);
+await sleep(700);
+check('原文：能切到源码视图', (await s.js(`return !!document.querySelector('.doc-screen .doc-raw');`)) === true);
+await s.js(`document.querySelector('.doc-screen [data-doc-raw]').click();`);
+await sleep(600);
+
 /* ---------- 1. 错题模块：先造一道「遗忘曲线到期」的题 ---------- */
 // 用 3 天前做「完美」的方式，让间隔 1 天的排期立刻到期（不依赖外部预置数据）
 const seedList = await (await fetch(`${APP}/api/questions`)).json();
@@ -295,6 +514,8 @@ await api2('/api/checkin', {
 await sleep(600);
 
 await s.js(`document.querySelector('.tab[data-module="mistakes"]').click();`);
+await sleep(1600);
+await s.js(`document.querySelector('.subtab[data-sub="dashboard"]').click();`);
 await sleep(1600);
 await s.waitFor('.category-grid');
 const tabNames = await s.js(`return [...document.querySelectorAll('.tab')].map(x=>x.textContent.trim()).join('/');`);
@@ -391,6 +612,21 @@ check(
   (await s.js(`return !!document.querySelector('#drawerPanel [data-solve-start]');`)) === true &&
     (await s.js(`return !!document.querySelector('#drawerPanel [data-checkin]');`)) === false
 );
+check('详情：有「本题原文」入口', (await s.js(`return !!document.querySelector('#drawerPanel [data-doc-open]');`)) === true);
+check(
+  '详情：已去掉「相关笔记」按钮',
+  (await s.js(`return !!document.querySelector('#drawerPanel [data-related-notes], #drawerPanel .related-notes');`)) ===
+    false
+);
+// 从抽屉打开本题原文
+await s.js(`document.querySelector('#drawerPanel [data-doc-open]').click();`);
+await sleep(1800);
+check('原文：从题目能打开自己的源文件', (await s.js(`return !!document.querySelector('.doc-screen');`)) === true);
+check('原文：笔记正文已渲染', (await s.js(`return (document.querySelector('.doc-screen .note-body')?.textContent || '').length;`)) > 200);
+await s.shot("22-pick-doc");
+await s.js(`document.querySelector('[data-doc-back]').click();`);
+await sleep(1400);
+
 await s.shot('04-drawer');
 
 /* ---------- 5.4 全屏做题模式 ---------- */
@@ -496,6 +732,7 @@ await s.shot('06-review-scoped');
 
 await s.js(`document.querySelector('[data-rv-count="5"]').click();`);
 await sleep(400);
+const checkinsBefore = (await (await fetch(`${APP}/api/stats`)).json()).totals.checkins;
 await s.js(`document.querySelector('[data-review="start"]').click();`);
 await s.waitFor('.rv-card');
 const firstNum = await s.js(`return document.querySelector('.rv-num').textContent.trim();`);
@@ -527,8 +764,12 @@ check('复习：逐题结果 5 行', rows === 5, `${rows} 行`);
 await s.shot('08-review-done');
 
 const apiStats = await (await fetch(`${APP}/api/stats`)).json();
-// 本局 5 次 + 预置的那 1 次（用来制造「遗忘曲线到期」）
-check('复习：打卡确实写回文件', apiStats.totals.checkins === 7, `累计打卡 ${apiStats.totals.checkins} 次`);
+// 本局答了 5 题，文件里就该多 5 次打卡
+check(
+  '复习：打卡确实写回文件',
+  apiStats.totals.checkins === checkinsBefore + 5,
+  `${checkinsBefore} → ${apiStats.totals.checkins} 次`
+);
 
 /* ---------- 6.5 遗忘曲线 + 用时分析 ---------- */
 const detail = await (await fetch(`${APP}/api/stats`)).json();
@@ -611,7 +852,7 @@ const before = (await (await fetch(`${APP}/api/questions`)).json()).problems.len
 await s.js(`document.querySelector('[data-add="create"]').click();`);
 await sleep(1800);
 const afterDoc = await (await fetch(`${APP}/api/questions`)).json();
-check('增题：写盘成功（10 → 12 题）', before === 10 && afterDoc.problems.length === 12, `${before} → ${afterDoc.problems.length}`);
+check('增题：写盘成功（+2 题）', afterDoc.problems.length === before + 2, `${before} → ${afterDoc.problems.length}`);
 const os8 = afterDoc.tree.find((c) => c.name === '408');
 check('增题：408 / 操作系统 目录已自动创建', !!os8 && os8.total === 1, os8 ? `408 共 ${os8.total} 题` : '没有 408');
 const newFile = afterDoc.problems.find((p) => p.category === '408');

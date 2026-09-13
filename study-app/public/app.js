@@ -8,13 +8,15 @@ const state = {
   book: 'mistakes',
   patterns: null,
   openPattern: null,
+  doc: null,
+  docRaw: false,
   sub: 'dashboard',
   view: 'dashboard',
   scope: { category: null, subject: null, chapter: null },
   data: null, // 全量：problems / tree / taxonomy / options
   stats: null, // 当前 scope 的统计
   q: '',
-  filters: { status: null, difficulty: null, heat: null, point: null },
+  filters: { status: null, difficulty: null, heat: null, point: null, kind: null },
   openId: null,
   pickerOpen: false,
   solve: { id: null, revealed: false, startedAt: 0, timerId: null, pendingResult: null },
@@ -45,7 +47,7 @@ const state = {
   journal: null,
 };
 
-const MODULES = ['today', 'mistakes', 'good', 'patterns', 'plan', 'journal'];
+const MODULES = ['today', 'mistakes', 'good', 'patterns', 'plan', 'journal', 'doc'];
 const BOOK_OF = { mistakes: 'mistakes', good: 'good' };
 const SUBVIEWS = ['dashboard', 'library', 'drill', 'add', 'solve'];
 const MODULE_LABEL = { today: '今日', mistakes: '错题', good: '好题', patterns: '题型', plan: '计划', journal: '复盘' };
@@ -124,6 +126,7 @@ async function api(path, options) {
    ============================================================ */
 function scopeQuery(scope = state.scope) {
   const p = new URLSearchParams();
+  p.set('book', state.book || 'mistakes');
   if (scope.category) p.set('category', scope.category);
   if (scope.subject) p.set('subject', scope.subject);
   if (scope.chapter) p.set('chapter', scope.chapter);
@@ -132,7 +135,10 @@ function scopeQuery(scope = state.scope) {
 
 function scopeOfProblem(p) {
   const s = state.scope;
-  if ((p.kind || 'mistakes') !== state.book) return false;
+  // 题库页可以「共通」看两本书；其他页面只看当前这本
+  let wantKind = state.sub === 'library' ? state.filters.kind : state.book;
+  if (wantKind === 'current' || !wantKind) wantKind = state.book;
+  if (wantKind !== 'all' && (p.kind || 'mistakes') !== wantKind) return false;
   if (s.category && p.category !== s.category) return false;
   if (s.subject && p.subject !== s.subject) return false;
   if (s.chapter && p.chapter !== s.chapter) return false;
@@ -175,14 +181,15 @@ function renderScopeButton() {
   const total = tree.reduce((s, c) => s + c.total, 0);
 
   const path = [cat?.name, sub?.name, ch?.name].filter(Boolean);
-  const label = path.length ? path.join(' › ') : '全部错题';
+  const all = `全部${bookNoun()}`;
+  const label = path.length ? path.join(' › ') : all;
   const count = ch ? ch.total : sub ? sub.total : cat ? cat.total : total;
 
   $('#scopeIcon').textContent = cat ? catIcon(cat.name) : '🎲';
   $('#scopeText').textContent = label;
   $('#scopeCnt').textContent = `${count} 题`;
   $('#scopeBtn').classList.toggle('is-scoped', path.length > 0);
-  $('#scopeBtn').title = path.length ? `当前范围：${label}　共 ${count} 题` : `全部错题　共 ${total} 题`;
+  $('#scopeBtn').title = path.length ? `当前范围：${label}　共 ${count} 题` : `${all}　共 ${total} 题`;
 }
 
 /** 下拉里的一行 */
@@ -205,7 +212,7 @@ function renderScopeMenu() {
   const total = tree.reduce((s, c) => s + c.total, 0);
 
   const parts = [
-    scopeRow({ active: !cat, icon: '🎲', name: '全部错题', count: total, kind: 'all', attrs: 'data-pick="reset"' }),
+    scopeRow({ active: !cat, icon: '🎲', name: `全部${bookNoun()}`, count: total, kind: 'all', attrs: 'data-pick="reset"' }),
     '<div class="sm-divider"></div>',
   ];
 
@@ -448,7 +455,7 @@ function troubledTable(stats) {
 /** 科目卡片（大类总览 / 全部总览用） */
 function subjectCards(node) {
   if (!node.children.length) {
-    return `<div class="panel"><div class="panel-body rv-hint">这个大类下还没有错题。去「题库」或「增题」加第一道吧。</div></div>`;
+    return `<div class="panel"><div class="panel-body rv-hint">这个大类下还没有题。去「题库」或「增题」加第一道吧。</div></div>`;
   }
   const total = node.children.reduce((s, c) => s + c.total, 0);
   return `<div class="subject-grid">${node.children
@@ -671,13 +678,13 @@ function filteredProblems() {
   });
 }
 
-function filterChips(label, options, key) {
+function filterChips(label, options, key, activeValue = state.filters[key]) {
   return `<div class="filter-group">
     <h4>${label}</h4>
     <div class="filter-list">
       ${options
         .map(
-          ({ value, text, count }) => `<button class="chip ${state.filters[key] === value ? 'is-on' : ''}"
+          ({ value, text, count }) => `<button class="chip ${activeValue === value ? 'is-on' : ''}"
         data-filter="${key}" data-value="${value === null ? '' : esc(value)}">${text}${
             count != null ? `<span class="cnt">${count}</span>` : ''
           }</button>`
@@ -692,7 +699,22 @@ function renderLibrary() {
   const scopedAll = state.data.problems.filter(scopeOfProblem);
   const countIn = (pred) => scopedAll.filter(pred).length;
 
+  const allProblems = state.data.problems;
+  const countKind = (k) => allProblems.filter((p) => (p.kind || 'mistakes') === k).length;
+
   const sidebar = `<aside class="sidebar">
+    ${filterChips(
+      '哪一本',
+      [
+        { value: 'current', text: `当前（${state.book === 'good' ? '好题' : '错题'}）`, count: countKind(state.book) },
+        { value: 'all', text: '全部（共通）', count: allProblems.length },
+        { value: 'mistakes', text: '错题本', count: countKind('mistakes') },
+        { value: 'good', text: '好题本', count: countKind('good') },
+      ],
+      'kind',
+      // 没选过时就是「当前这本」，别让三个筹码都不亮
+      state.filters.kind || 'current'
+    )}
     ${filterChips('复习状态', [
       { value: null, text: '全部', count: scopedAll.length },
       { value: '完成', text: '✅ 已完成', count: countIn((p) => p.stats.status === '完成') },
@@ -740,7 +762,9 @@ function renderLibrary() {
         <span class="badge badge-type">${esc(p.type)}</span>
         <span class="pc-chip-row">${stars(p.difficulty)}${fires(p.heat)}</span>
       </div>
-      <div class="pc-where">${esc(p.category)} · ${esc(p.subject)} · ${esc(p.chapter)}</div>
+      <div class="pc-where">${esc(p.category)} · ${esc(p.subject)} · ${esc(p.chapter)}${
+        state.filters.kind === 'all' ? `　<span class="kind-tag k-${p.kind}">${p.kind === 'good' ? '好题' : '错题'}</span>` : ''
+      }</div>
       <div class="pc-expr">${mdToHtml(p.title.replace(/^\S+[\s　]*/, ''))}</div>
       <div class="pc-foot">
         <span class="badge ${meta.cls}">${meta.text}</span>
@@ -850,6 +874,9 @@ function renderDrawer(id) {
     </section>
 
     <section class="do-panel">
+      <div class="drawer-actions">
+        <button class="btn-ghost small" data-doc-open="${esc(p.vaultRel || p.relPath)}">📄 本题原文</button>
+      </div>
       <button class="btn-primary big" data-solve-start="${esc(p.id)}">▶ 开始做题（全屏）</button>
       <div class="do-hint">进全屏做题模式：解析和错因都会藏起来，做完在那边打卡。</div>
       <div class="do-stats">
@@ -862,7 +889,10 @@ function renderDrawer(id) {
       ${timeline}
     </section>
 
-    <section class="points-panel">
+    ${
+      p.kind === 'good'
+        ? ''
+        : `<section class="points-panel">
       <h4>🧠 错因分析　<span class="hint">做错的原因，攒起来才看得出你的固定错法</span></h4>
       <div class="reason-edit">
         <span class="rp-label">首次错因</span>
@@ -873,7 +903,8 @@ function renderDrawer(id) {
         </select>
       </div>
       ${reasonReportHtml(p)}
-    </section>
+    </section>`
+    }
 
     <div class="stem-box">${mdToHtml(p.stem)}</div>
     ${foldBlock('fold-keypoints', '🔎', '核心考点与主要难点', '折叠', mdToHtml(p.keypoints))}
@@ -882,7 +913,7 @@ function renderDrawer(id) {
     ${p.pitfalls ? foldBlock('fold-pitfalls', '⚠️', '易错提醒', '点击展开', mdToHtml(p.pitfalls)) : ''}
 
     <div style="color:var(--text-3);font-size:12px;border-top:1px solid var(--border-soft);padding-top:12px">
-      源文件：${esc(p.relPath)}
+      源文件：${esc(p.vaultRel || p.relPath)}
     </div>
   </div>`;
 }
@@ -1018,14 +1049,14 @@ function renderReviewSetup() {
       <div class="filter-group">
         <h4>想要刷什么？换范围就换题库</h4>
         <div class="filter-list">
-          ${chip(!state.scope.category && !state.scope.subject, '🎲 全部混刷', state.data.problems.length, 'data-scope="reset"')}
-          ${state.data.tree
+          ${chip(!state.scope.category && !state.scope.subject, '🎲 全部混刷', state.data.problems.filter(scopeOfProblem).length, 'data-scope="reset"')}
+          ${currentTree()
             .map((c) => chip(false, `整个 ${c.name}`, c.total, `data-scope="category" data-value="${esc(c.name)}"`))
             .join('')}
         </div>
         <div class="rv-hint">下面按科目 / 章节再细选；选完上面的筹码，章节清单会跟着变。</div>
         <div class="filter-list" style="margin-top:8px">
-          ${state.data.tree
+          ${currentTree()
             .flatMap((c) => c.children.map((s) => chip(false, `${c.name}/${s.name}`, s.total, `data-scope="category" data-value="${esc(c.name)}" data-scope2="subject" data-value2="${esc(s.name)}"`)))
             .join('')}
         </div>
@@ -1477,6 +1508,9 @@ async function doSolveCheckin(result, reason) {
 function renderAdd() {
   const a = state.add;
   const items = a.items;
+  const isGood = state.book === 'good';
+  const bookName = bookLabel();
+  const noun = isGood ? '好题' : '错题';
 
   const preview = items && items.length
     ? `<div class="section-title"><h2>识别结果</h2><span class="hint">逐题核对，可直接改；编号已自动避开已有文件</span></div>
@@ -1486,7 +1520,7 @@ function renderAdd() {
         <div class="ai-head">
           <span class="ai-no">第 ${i + 1} 题</span>
           <span class="badge badge-type">${it.confidence ? `识别置信度 ${it.confidence}` : '未识别'}</span>
-          <span class="ai-file">→ ${esc(it.category)}/${esc(it.subject)}/${esc(it.chapter || it.subject)}/</span>
+          <span class="ai-file">→ ${esc(bookName)}/${esc(it.category)}/${esc(it.subject)}/${esc(it.chapter || it.subject)}/</span>
         </div>
         <div class="ai-fields">
           <label>大类 <input data-field="category" value="${esc(it.category)}" list="catList"></label>
@@ -1497,7 +1531,11 @@ function renderAdd() {
           <label>题型 <input data-field="type" value="${esc(it.type)}"></label>
           <label>难度 <select data-field="difficulty">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${'⭐'.repeat(n)}</option>`).join('')}</select></label>
           <label>热度 <select data-field="heat">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${'🔥'.repeat(n)}</option>`).join('')}</select></label>
-          <label>错因 <select data-field="reason">${['', ...REASONS].map((r) => `<option value="${esc(r)}">${r ? esc(r) : '（待补充）'}</option>`).join('')}</select></label>
+          ${
+            isGood
+              ? ''
+              : `<label>错因 <select data-field="reason">${['', ...REASONS].map((r) => `<option value="${esc(r)}">${r ? esc(r) : '（待补充）'}</option>`).join('')}</select></label>`
+          }
         </div>
         <pre class="ai-stem">${esc(it.stem.slice(0, 400))}${it.stem.length > 400 ? '\n…' : ''}</pre>
       </article>`
@@ -1511,9 +1549,14 @@ function renderAdd() {
 
   return `<div class="add-page">
     <div class="rv-setup-head">
-      <h2>加新错题</h2>
-      <p>程序负责机械活：认章节、定题型、编号、建骨架、写进对应文件夹。
-        <b>答案与解析留空</b>——把下面生成的提示词发给我，我来算、来写、来复核。</p>
+      <h2>加新${noun}</h2>
+      <p>程序负责机械活：认章节、定题型、编号、建骨架、写进 <b>${esc(bookName)}</b>。
+        <b>答案与解析留空</b>——把下面生成的提示词发给我，我来算、来写、来复核。
+        ${
+          isGood
+            ? '好题不写错因分析；'
+            : ''
+        }生成提示词时会顺手把它归进「题型本」的对应通解。</p>
     </div>
 
     <section class="panel">
@@ -1556,20 +1599,24 @@ function renderAdd() {
             : ''
         }
         <div class="add-controls">
-          <label class="inline-field">这批题的错因
+          ${
+            isGood
+              ? ''
+              : `<label class="inline-field">这批题的错因
             <select id="imageReason">${['', ...REASONS].map((r) => `<option value="${esc(r)}">${r ? esc(r) : '（待补充，你问我）'}</option>`).join('')}</select>
-          </label>
+          </label>`
+          }
           <button class="btn-primary small" data-add="prompt-images" ${a.uploads && a.uploads.length ? '' : 'disabled'}>📋 生成提示词（发给我转成题目）</button>
           <button class="btn-ghost small" data-add="clear-uploads" ${a.uploads && a.uploads.length ? '' : 'disabled'}>清空暂存</button>
         </div>
-        <div class="rv-hint">生成的提示词里会带上图片路径、错因和完整格式规范。把提示词发给我，我读完图就把题目写进错题本（图我会重画，不用你的原图）。</div>
+        <div class="rv-hint">生成的提示词里会带上图片路径${isGood ? '' : '、错因'}和完整格式规范。把提示词发给我，我读完图就把题目写进${esc(bookName)}（图我会重画，不用你的原图）。</div>
       </div>
     </section>
 
     ${preview}
 
     <div class="rv-start-row">
-      <button class="btn-primary" data-add="create" ${items && items.length ? '' : 'disabled'}>✚ 生成骨架并写入错题本</button>
+      <button class="btn-primary" data-add="create" ${items && items.length ? '' : 'disabled'}>✚ 生成骨架并写入${esc(bookName)}</button>
       <button class="btn-ghost" data-add="prompt" ${items && items.length ? '' : 'disabled'}>📋 复制提示词给 AI</button>
       <button class="btn-ghost" data-add="clear">清空</button>
     </div>
@@ -1602,7 +1649,10 @@ async function addParse() {
   state.add.raw = raw;
   if (!raw.trim()) return toast('先粘贴题干', 'err');
   try {
-    const out = await api('/api/detect', { method: 'POST', body: JSON.stringify({ raw, mode: state.add.mode }) });
+    const out = await api('/api/detect', {
+      method: 'POST',
+      body: JSON.stringify({ raw, mode: state.add.mode, book: state.book }),
+    });
     state.add.items = out.items;
     render();
     toast(`识别出 ${out.count} 道题`);
@@ -1624,7 +1674,7 @@ async function addCreate() {
     state.add.raw = '';
     await reload({ silent: true });
     render();
-    toast(`已新建 ${out.created.length} 篇，错题本现在共 ${out.total} 题`, 'ok');
+    toast(`已新建 ${out.created.length} 篇，现在共 ${out.total} 题（错题 + 好题）`, 'ok');
   } catch (err) {
     toast(`写入失败：${err.message}`, 'err');
   } finally {
@@ -1712,10 +1762,10 @@ async function promptImages() {
   try {
     const out = await api('/api/prompt-images', {
       method: 'POST',
-      body: JSON.stringify({ names: state.add.uploads.map((f) => f.name), reason }),
+      body: JSON.stringify({ names: state.add.uploads.map((f) => f.name), reason, book: state.book }),
     });
     await copyText(out.prompt);
-    toast('提示词已复制 —— 粘给我，我读完图就把题目写进去', 'ok');
+    toast(`提示词已复制（写进${bookLabel()}）—— 粘给我，我读完图就把题目写进去`, 'ok');
   } catch (e) {
     toast(`生成提示词失败：${e.message}`, 'err');
   }
@@ -1727,13 +1777,29 @@ async function addPrompt() {
   try {
     const out = await api('/api/prompt', {
       method: 'POST',
-      body: JSON.stringify({ stems: items.map((i) => i.stem), category: items[0].category, subject: items[0].subject, chapter: items[0].chapter }),
+      body: JSON.stringify({
+        stems: items.map((i) => i.stem),
+        category: items[0].category,
+        subject: items[0].subject,
+        chapter: items[0].chapter,
+        book: state.book,
+      }),
     });
     await copyText(out.prompt);
-    toast('提示词已复制，去对话里发给我即可', 'ok');
+    toast(`提示词已复制（写进${bookLabel()}）—— 去对话里发给我即可`, 'ok');
   } catch (err) {
     toast(`生成提示词失败：${err.message}`, 'err');
   }
+}
+
+/** 当前在哪一本：错题本 / 好题本（说“目录”时用） */
+function bookLabel(book = state.book) {
+  return book === 'good' ? '好题本' : '错题本';
+}
+
+/** 当前在哪一本，只要名词：错题 / 好题 */
+function bookNoun(book = state.book) {
+  return book === 'good' ? '好题' : '错题';
 }
 
 /* ============================================================
@@ -1770,6 +1836,12 @@ function renderPatterns() {
   const d = state.patterns;
   if (!d) return '<div class="loading"><div class="spinner"></div><p>正在读取题型本…</p></div>';
 
+  // 大屏：整页看一份通解
+  if (state.openPattern) {
+    const pt = (d.patterns || []).find((x) => x.id === state.openPattern);
+    if (pt) return renderPatternDetail(pt);
+  }
+
   const list = d.patterns || [];
   const withMastery = list.filter((x) => x.mastery != null);
   const avg = withMastery.length ? Math.round(withMastery.reduce((s, x) => s + x.mastery, 0) / withMastery.length) : 0;
@@ -1790,32 +1862,24 @@ function renderPatterns() {
         <div class="stat-card"><div class="stat-label">已归类题目</div><div class="stat-value">${linkedTotal}</div>
           <div class="stat-foot">共 ${linkedTotal + d.unlinkedCount} 道</div></div>
         <div class="stat-card is-pending"><div class="stat-label">还没归类</div><div class="stat-value">${d.unlinkedCount}</div>
-          <div class="stat-foot">点右边按钮把它们计入题型本</div></div>
+          <div class="stat-foot">${d.unlinkedCount ? '下次在「增题」页生成提示词时会自动归进去' : '全都归好了 🎉'}</div></div>
       </div>
-      <button class="btn-primary" data-pattern-prompt="1" ${d.unlinkedCount ? '' : 'disabled'}>
-        📋 生成提示词：把没归类的 ${d.unlinkedCount} 道题计入题型本
-      </button>
-      ${d.unlinkedCount ? '' : '<span class="rv-hint" style="margin-left:12px">所有题目都已归类到某个通解 🎉</span>'}
-      <div class="rv-hint" style="margin-top:8px">
-        生成的提示词里会带上<b>所有已有通解</b>和<b>没归类的题目</b>。发给我之后，能并入已有通解的只改关联，
-        新题型才新建 —— 同一题型永远只有一份通解。
+      <div class="rv-hint">
+        新题在<b>增题页生成提示词时就会自动归类</b>：能并入已有通解的只改关联，新题型才新建 ——
+        同一题型永远只有一份通解。
       </div>
     </div>
   </section>`;
 
   if (!list.length) {
     return `${head}<div class="panel" style="margin-top:14px"><div class="panel-body empty-row">
-      题型本还是空的。点上面的按钮生成提示词，发给我，我来按题型写第一份通解。
+      题型本还是空的。去「增题」页加题时，生成的提示词会顺手写下第一份通解。
     </div></div>`;
   }
 
   const cards = list
-    .map((pt) => {
-      const open = state.openPattern === pt.id;
-      const rel = (pt.related || [])
-        .map((id) => state.data.problems.find((p) => p.id === id))
-        .filter(Boolean);
-      return `<article class="pattern-card${open ? ' is-open' : ''}" data-pattern-toggle="${esc(pt.id)}">
+    .map(
+      (pt) => `<article class="pattern-card" data-pattern-open="${esc(pt.id)}">
       <div class="pp-head">
         <h3>${esc(pt.title)}</h3>
         ${pt.type ? `<span class="badge badge-type">${esc(pt.type)}</span>` : ''}
@@ -1829,49 +1893,110 @@ function renderPatterns() {
         ${masteryBadge(pt)}
       </div>
       <div class="progress" style="margin-top:8px"><i style="width:${pt.mastery ?? 0}%"></i></div>
-      <div class="pp-fold">
-        ${
-          open
-            ? `<div class="pp-body">
-                ${pt.features ? `<h4>适用特征</h4>${mdToHtml(pt.features)}` : ''}
-                ${pt.steps ? `<h4>通解步骤</h4>${mdToHtml(pt.steps)}` : ''}
-                ${pt.pitfalls ? `<h4>易错点</h4>${mdToHtml(pt.pitfalls)}` : ''}
-                ${
-                  rel.length
-                    ? `<h4>关联题目（${rel.length}）</h4>
-                       <div class="pp-rel">${rel
-                         .map(
-                           (p) => `<button class="rel-chip k-${p.kind}" data-open="${esc(p.id)}">
-                             <span class="rc-kind">${p.kind === 'good' ? '好' : '错'}</span>
-                             ${esc(p.num)}
-                             <span class="rc-status">${esc(statusMeta(p.stats.status).text)}</span>
-                           </button>`
-                         )
-                         .join('')}</div>`
-                    : '<p class="rv-hint">还没关联任何题目。</p>'
-                }
-                <div class="rv-hint" style="margin-top:10px">源文件：<code>${esc(pt.rel)}</code></div>
-              </div>`
-            : '<span class="pp-more">点击查看通解与关联题目 ▾</span>'
-        }
-      </div>
-    </article>`;
-    })
+      <div class="pp-fold"><span class="pp-more">点开看通解与关联题目 →</span></div>
+    </article>`
+    )
     .join('');
 
   return `${head}<div class="pattern-list">${cards}</div>`;
 }
 
-async function copyPatternPrompt() {
+/** 题型大屏：整页看一份通解 */
+function renderPatternDetail(pt) {
+  const rel = (pt.related || []).map((id) => state.data.problems.find((p) => p.id === id)).filter(Boolean);
+  return `<div class="review pattern-screen">
+    <div class="rv-bar">
+      <button class="rv-exit" data-pattern-back="1">← 回到题型列表</button>
+      <span class="rv-where">${esc(pt.category)} · ${esc(pt.subject)} · ${esc(pt.chapter)}</span>
+    </div>
+    <article class="rv-card">
+      <div class="rv-head">
+        <span class="rv-num">${esc(pt.title)}</span>
+        ${pt.type ? `<span class="badge badge-type">${esc(pt.type)}</span>` : ''}
+        ${stars(pt.difficulty)}${fires(pt.heat)}
+        ${masteryBadge(pt)}
+      </div>
+      <div class="rv-stem">
+        ${pt.features ? `<h4 class="pp-h">适用特征</h4>${mdToHtml(pt.features)}` : ''}
+        ${pt.steps ? `<h4 class="pp-h">通解步骤</h4>${mdToHtml(pt.steps)}` : ''}
+        ${pt.pitfalls ? `<h4 class="pp-h">易错点</h4>${mdToHtml(pt.pitfalls)}` : ''}
+      </div>
+      <div class="rv-revealed" style="margin-top:16px">
+        <h4 class="pp-h" style="margin:0 0 10px">关联题目（${rel.length}）</h4>
+        ${
+          rel.length
+            ? `<div class="pp-rel">${rel
+                .map(
+                  (p) => `<button class="rel-chip k-${p.kind}" data-open="${esc(p.id)}">
+                    <span class="rc-kind">${p.kind === 'good' ? '好' : '错'}</span>${esc(p.num)}
+                    <span class="rc-status">${esc(statusMeta(p.stats.status).text)}</span></button>`
+                )
+                .join('')}</div>`
+            : '<p class="rv-hint">还没关联任何题目。</p>'
+        }
+      </div>
+      <div class="solve-foot">
+        <span>源文件：${esc(pt.rel)}</span>
+        <button class="link-btn" data-doc-open="${esc(pt.rel)}">📄 看原文</button>
+      </div>
+    </article>
+  </div>`;
+}
+
+/* ---------------- 原文查看 ---------------- */
+async function loadDoc(rel) {
+  state.doc = { rel, loading: true };
   try {
-    const out = await api('/api/pattern-prompt');
-    if (!out.unlinkedCount) return toast('所有题目都已经归类了', 'ok');
-    await copyText(out.prompt);
-    toast(`提示词已复制（${out.unlinkedCount} 道待归类）—— 粘给我就行`, 'ok');
+    state.doc = await api(`/api/raw?rel=${encodeURIComponent(rel)}`);
   } catch (err) {
-    toast(`生成失败：${err.message}`, 'err');
+    state.doc = { rel, content: `读取失败：${err.message}`, error: true };
   }
 }
+
+/** 原文页：把笔记正文（去掉 frontmatter）渲染出来，图片与双链都能用 */
+function renderDoc() {
+  const d = state.doc;
+  if (!d || d.loading) return '<div class="loading"><div class="spinner"></div><p>正在读取原文…</p></div>';
+  const body = (d.content || '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+  const fm = (d.content || '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const title = (body.match(/^#\s+(.+?)\s*$/m) || [])[1] || d.name || d.rel;
+  const size = d.size ? `${(d.size / 1024).toFixed(1)} KB` : '';
+  return `<div class="doc-screen">
+    <div class="rv-bar">
+      <button class="rv-exit" data-doc-back="1">← 返回</button>
+      <span class="rv-where"><code>${esc(d.rel)}</code>${size ? `　${size}` : ''}</span>
+      <button class="rv-exit doc-raw-toggle" data-doc-raw="1">${state.docRaw ? '看渲染' : '看源码'}</button>
+    </div>
+    <article class="note-detail">
+      ${
+        state.docRaw
+          ? `<pre class="code-block doc-raw"><code>${esc(d.content || '')}</code></pre>`
+          : `<div class="note-body">${mdToHtml(body)}</div>`
+      }
+      ${fm ? `<details class="doc-fm"><summary>frontmatter</summary><pre class="code-block"><code>${esc(fm[1])}</code></pre></details>` : ''}
+      <div class="note-detail-foot">原文：<code>${esc(d.rel)}</code>${title ? '' : ''}</div>
+    </article>
+  </div>`;
+}
+
+/** 打开一篇笔记原文（双链跳转也走这里） */
+async function openDoc(rel) {
+  closeDrawer();
+  go({ module: 'doc', rel });
+}
+
+/** 双链 [[名字]] / [[名字|别名]] 在程序里直接跳到那篇笔记 */
+async function openWikiLink(target) {
+  if (!target) return;
+  try {
+    const n = await api(`/api/note?name=${encodeURIComponent(target)}`);
+    return openDoc(n.rel);
+  } catch (err) {
+    toast(`打不开「${target}」：${err.message}`, 'err');
+  }
+}
+
+/* 归类提示词不再从「题型」页生成：新题在「增题」页生成提示词时就会自动归类到题型本 */
 
 /* ============================================================
    study：今日 / 计划 / 笔记 / 复盘
@@ -2343,6 +2468,8 @@ function render() {
   else if (state.module === 'journal') body = renderJournal();
   else if (state.module === 'patterns') {
     body = renderPatterns();
+  } else if (state.module === 'doc') {
+    body = renderDoc();
   } else {
     if (!state.data || !state.stats) {
       main.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在读取错题本…</p></div>';
@@ -2399,6 +2526,8 @@ function buildHash({ module, sub, scope, solveId, rel }) {
       if (scope?.subject) seg.push(scope.subject);
       if (scope?.chapter) seg.push(scope.chapter);
     }
+  } else if ((module === 'patterns' || module === 'doc') && rel) {
+    seg.push(rel); // 整段编码，路径里的 / 不会把 hash 拆散
   } else if (module === 'plan' && rel) {
     seg.push(...String(rel).split('/'));
   } else if (module === 'journal' && rel) {
@@ -2415,7 +2544,13 @@ function applyHash() {
     .map(decodeURIComponent);
   const module = MODULES.includes(parts[0]) ? parts[0] : 'today';
   state.module = module;
-  if (BOOK_OF[module]) state.book = BOOK_OF[module];
+  if (BOOK_OF[module]) {
+    const nextBook = BOOK_OF[module];
+    // 换书时把「哪一本」筛选收回当前这本：否则在错题本里点过「全部（共通）」，
+    // 切到好题页会又看到一堆错题，看起来像没分开
+    if (state.book !== nextBook) state.filters.kind = null;
+    state.book = nextBook;
+  }
 
   if (module === 'mistakes' || module === 'good') {
     const sub = SUBVIEWS.includes(parts[1]) ? parts[1] : 'dashboard';
@@ -2444,8 +2579,17 @@ function applyHash() {
   stopReviewTimer();
   closeSolveTimerOnly();
 
+  // 题型 / 原文的路径里本来就带 /，程序自己会整段编码；
+  // 但手打或分享出来的 URL 往往是没编码的，这里 join 回去，两种都认
   if (module === 'patterns') {
+    state.openPattern = parts.length > 1 ? parts.slice(1).join('/') : null;
     loadPatterns().then(() => render());
+    render();
+    return;
+  }
+  if (module === 'doc') {
+    const rel = parts.length > 1 ? parts.slice(1).join('/') : null;
+    if (rel) loadDoc(rel).then(() => render());
     render();
     return;
   }
@@ -2500,7 +2644,8 @@ function go(patch = {}) {
   }
 
   let rel = patch.rel;
-  if (module === 'journal') rel = patch.date !== undefined ? patch.date : state.journalDate;
+  if (module === 'patterns') rel = patch.rel !== undefined ? patch.rel : state.openPattern;
+  else if (module === 'journal') rel = patch.date !== undefined ? patch.date : state.journalDate;
   else if (module === 'plan') rel = patch.rel !== undefined ? patch.rel : state.planRel;
   const hash = buildHash({ module, rel });
   if (location.hash !== hash) location.hash = hash;
@@ -2553,7 +2698,7 @@ function bindEvents() {
 
   $('#mistakeSubnav').addEventListener('click', (e) => {
     const btn = e.target.closest('.subtab');
-    if (btn) go({ module: 'mistakes', sub: btn.dataset.sub });
+    if (btn) go({ module: state.book, sub: btn.dataset.sub });
   });
 
   window.addEventListener('hashchange', applyHash);
@@ -2616,7 +2761,7 @@ function bindEvents() {
 
   $('#search').addEventListener('input', (e) => {
     state.q = e.target.value;
-    if (state.q && !(state.module === 'mistakes' && state.sub === 'library')) go({ module: 'mistakes', sub: 'library' });
+    if (state.q && !(BOOK_OF[state.module] && state.sub === 'library')) go({ module: state.book, sub: 'library' });
     else render();
   });
 
@@ -2660,7 +2805,7 @@ function bindEvents() {
       if (action === 'record') return requestReviewRecord(rv.dataset.result);
       if (action === 'skip') return skipReview();
       if (action === 'exit') return exitReview();
-      if (action === 'back') return go({ module: 'mistakes', sub: 'dashboard' });
+      if (action === 'back') return go({ module: state.book, sub: 'dashboard' });
     }
 
     const add = e.target.closest('[data-add]');
@@ -2709,7 +2854,7 @@ function bindEvents() {
     const sv = e.target.closest('[data-solve]');
     if (sv) {
       const a = sv.dataset.solve;
-      if (a === 'exit') return go({ module: 'mistakes', sub: 'library' });
+      if (a === 'exit') return go({ module: state.book, sub: 'library' });
       if (a === 'reveal') {
         state.solve.revealed = true;
         return render();
@@ -2749,13 +2894,18 @@ function bindEvents() {
       return go({ module: v });
     }
     if (e.target.closest('[data-weekly-prompt]')) return copyWeeklyPrompt();
-    if (e.target.closest('[data-pattern-prompt]')) return copyPatternPrompt();
-    const ptoggle = e.target.closest('[data-pattern-toggle]');
-    if (ptoggle) {
-      const id = ptoggle.dataset.patternToggle;
-      state.openPattern = state.openPattern === id ? null : id;
+    const popen = e.target.closest('[data-pattern-open]');
+    if (popen) return go({ module: 'patterns', rel: popen.dataset.patternOpen });
+    if (e.target.closest('[data-pattern-back]')) return go({ module: 'patterns', rel: null });
+    if (e.target.closest('[data-doc-back]')) return history.length > 1 ? history.back() : go({ module: 'today' });
+    if (e.target.closest('[data-doc-raw]')) {
+      state.docRaw = !state.docRaw;
       return render();
     }
+    const wl = e.target.closest('[data-wikilink]');
+    if (wl) return openWikiLink(wl.dataset.wikilink);
+    const dopen = e.target.closest('[data-doc-open]');
+    if (dopen) return openDoc(dopen.dataset.docOpen);
 
     const planBtn = e.target.closest('[data-plan]');
     if (planBtn) return go({ module: 'plan', rel: planBtn.dataset.plan });
@@ -2776,7 +2926,7 @@ function bindEvents() {
       state.filters = { status: null, difficulty: null, heat: null, point: ptRow.dataset.point };
       state.q = '';
       $('#search').value = '';
-      return go({ module: 'mistakes', sub: 'library' });
+      return go({ module: state.book, sub: 'library' });
     }
 
     const fchip = e.target.closest('[data-filter]');
@@ -2790,7 +2940,7 @@ function bindEvents() {
     }
 
     if (e.target.closest('#resetFilters')) {
-      state.filters = { status: null, difficulty: null, heat: null, point: null };
+      state.filters = { status: null, difficulty: null, heat: null, point: null, kind: null };
       state.q = '';
       $('#search').value = '';
       return render();
@@ -2799,9 +2949,15 @@ function bindEvents() {
 
   $('#drawer').addEventListener('click', (e) => {
     if (e.target.closest('[data-close-drawer]')) return closeDrawer();
-    // 抽屉里的「开始做题」按钮在抽屉内部，需要在这里接
+    // 下面这些按钮在抽屉内部，抽屉不在 #main 里，得单独接
     const start = e.target.closest('[data-solve-start]');
     if (start) return goSolve(start.dataset.solveStart);
+
+    const wl2 = e.target.closest('[data-wikilink]');
+    if (wl2) return openWikiLink(wl2.dataset.wikilink);
+
+    const dopen2 = e.target.closest('[data-doc-open]');
+    if (dopen2) return openDoc(dopen2.dataset.docOpen);
 
     const c = e.target.closest('[data-checkin]');
     if (c) return doCheckin(c.dataset.id, c.dataset.checkin, c);
@@ -2847,7 +3003,8 @@ function bindEvents() {
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
 
     // 全屏做题模式
-    if (state.module === 'mistakes' && state.sub === 'solve' && !typing) {
+    // 快捷键在「错题」和「好题」两本书里都要能用
+    if (BOOK_OF[state.module] && state.sub === 'solve' && !typing) {
       if (e.key === ' ') {
         e.preventDefault();
         if (!state.solve.revealed) {
@@ -2865,12 +3022,12 @@ function bindEvents() {
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        return go({ module: 'mistakes', sub: 'library' });
+        return go({ module: state.book, sub: 'library' });
       }
       return;
     }
 
-    if (state.module === 'mistakes' && state.sub === 'drill' && state.review.phase === 'run' && !typing) {
+    if (BOOK_OF[state.module] && state.sub === 'drill' && state.review.phase === 'run' && !typing) {
       const r = state.review;
       if (e.key === ' ') { e.preventDefault(); return revealReview(); }
       if (['1', '2', '3'].includes(e.key)) {
@@ -2894,7 +3051,10 @@ function bindEvents() {
    ============================================================ */
 function goSolve(id) {
   closeDrawer();
-  const h = buildHash({ module: 'mistakes', sub: 'solve', solveId: id });
+  // 题目属于哪一本，URL 就用哪一本（题库「全部（共通）」里可能点到另一本的题）
+  const p = state.data?.problems.find((x) => x.id === id);
+  const book = p ? p.kind || 'mistakes' : state.book;
+  const h = buildHash({ module: book, sub: 'solve', solveId: id });
   if (location.hash === h) applyHash();
   else location.hash = h;
 }

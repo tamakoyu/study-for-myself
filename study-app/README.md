@@ -3,7 +3,8 @@
 **Obsidian 存数据 + 本地程序管复习**。六个页面都直接读写你 Obsidian 里的 Markdown：
 今日 / 错题 / 好题 / 题型 / 计划 / 复盘。
 
-> 笔记不在程序里看 —— Obsidian 本身更好用，所以 Obsidian 里现在**只留笔记**，其余目录全部隐藏。
+> 笔记主要在 Obsidian 里写。程序里也能**只读地看**一篇笔记的原文（题目的源文件，
+> 图片和 `[[双链]]` 都能点），不用切窗口对照。Obsidian 里现在**只留笔记**，其余目录全部隐藏。
 
 > 程序进 git，**笔记 / 计划 / 复盘都不进 git**（私人内容，只留本地 Obsidian）。
 
@@ -14,7 +15,7 @@
 | `题型本/` | 每个题型一份「通解」 | 「题型」页 |
 | `考研/` | 月计划 + 周计划（勾选状态就写在这些文件里） | 「计划」页 + 首页今日任务 |
 | `复盘/` | 每日复盘 `26.9/第二周/9.13复盘.md` | 「复盘」页 |
-| `高等数学/` 等 | 学习笔记 | 不进程序，在 Obsidian 里看 |
+| `高等数学/` 等 | 学习笔记 | 主要留在 Obsidian 里看；程序里顺着 `[[双链]]` 也能只读打开（`config.json` 的 `noteDirs`） |
 
 ```
 错题本/
@@ -29,12 +30,12 @@
 **方式一（最省事）**：双击桌面上的 **`启动错题本.command`**。
 它会先探服务在不在：在就只开浏览器，不在就启动服务再开。
 
-**方式二**：访达里双击 `错题本-app/启动错题本.command`。
+**方式二**：访达里双击 `study-app/启动错题本.command`。
 
 **方式三**：终端
 
 ```bash
-cd "错题本-app"
+cd study-app
 node server.mjs              # 启动并自动开浏览器
 node server.mjs --no-open    # 只启动
 node server.mjs --port 4200  # 换端口
@@ -43,13 +44,23 @@ node server.mjs --port 4200  # 换端口
 打开后地址是 **http://127.0.0.1:4173**
 
 > 窗口关掉服务就停了。首次双击 `.command` 若提示「无法打开」，执行一次：
-> `chmod +x "错题本-app/启动错题本.command"`
+> `chmod +x "study-app/启动错题本.command"`
 
-**环境变量**（临时指向另一份错题本，做实验用）
+**环境变量**（临时指向另一份仓库，做实验 / 跑测试用）
 
 ```bash
-NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-open
+# 整套指到另一份仓库：错题本 / 好题本 / 题型本 / 计划 / 复盘 / 笔记目录全部跟着走
+VAULT_DIR=/tmp/另一份仓库 NOTEBOOK_PORT=4199 \
+  BACKUP_DIR=/tmp/试验/backups UPLOAD_DIR=/tmp/试验/uploads EXPORT_DIR=/tmp/试验/data \
+  node server.mjs --no-open
 ```
+
+| 变量 | 作用 |
+| --- | --- |
+| `VAULT_DIR` | 整个仓库换位置（仓库内所有目录跟着走） |
+| `NOTEBOOK_DIR` / `GOOD_DIR` / `PATTERN_DIR` | 单独换某一本 |
+| `BACKUP_DIR` / `UPLOAD_DIR` / `EXPORT_DIR` | 程序自己的目录换位置（测试时别污染真的备份） |
+| `NOTEBOOK_PORT` | 换端口 |
 
 ---
 
@@ -66,9 +77,23 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 
 ### ④ 好题本
 
-和错题本**一模一样**（同一套总览 / 题库 / 复习 / 增题），唯一的区别是
+和错题本**一模一样**（同一套总览 / 题库 / 复习 / 增题、同一套键盘快捷键），区别只有一个：
 **不写错因分析** —— 好题不是因为做错才收的，不需要归因。
-两本书各自有独立的导航树、统计和复习队列，顶栏切一下就行。
+
+两本书是**彻底分开**的：
+
+| | 错题本 | 好题本 |
+| --- | --- | --- |
+| 数据目录 | `错题本/` | `好题本/` |
+| 题目 id 前缀 | `mistakes:` | `good:` |
+| 编号 | `极限-01 …` 各排各的 | 同左，**从自己这本的 01 开始** |
+| 统计 / 导航树 / 复习队列 | 各自独立 | 各自独立 |
+| 增题提示词 | 「写进 `错题本/…` + 首次错因」 | 「写进 `好题本/…`，不要写错因」 |
+
+**题库可以共通看**：题库左侧第一组筛选「哪一本」有四个选项 ——
+「当前（错题/好题）」「全部（共通）」「错题本」「好题本」。
+切到「全部」时，卡片上会标出这题来自哪一本（🟥 错题 / 🟩 好题）。
+**换书会自动收回这个筛选**，不会出现在好题页却满屏错题的情况。
 
 ### ⑤ 题型大全（通解）
 
@@ -79,9 +104,11 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 - 每篇带 **难度 ⭐ · 考研热度 🔥 · 掌握度**
 - **掌握度不是手写的** —— 由它关联的错题/好题算出来：每道关联题目有自己的遗忘曲线
   「掌握等级」，取平均就是这份通解的掌握度。没练过就显示「还没练过」
-- 点开卡片能看到通解正文和**关联的题目**（错题 / 好题分色标注），点题目直接跳过去
-- 顶部的 **📋 生成提示词** 会把「已有通解 + 还没归类的题目」打包成提示词，
-  发给 AI 之后：能并入已有通解的只改 `related` 关联，新题型才新建 ——
+- **点一下卡片直接进「大屏」**：整页看这份通解的适用特征 / 通解步骤 / 易错点，
+  下面是关联的错题 / 好题（分色标注），点题目进详情、点「📄 看原文」看源文件
+- **归类是增题时自动做的**，题型页不再有「生成提示词」按钮：
+  在「增题」页生成提示词时，程序会把**已有全部通解**一起塞进提示词，
+  并要求 AI：能并入已有通解的只把新题 id 追加到 `related`，新题型才新建 ——
   **同一个题型永远只有一份通解**
 
 通解的 frontmatter：
@@ -181,8 +208,30 @@ related:
 识别依据是关键词打分（极限 / 导数 / 矩阵 / 进程 / TCP……），识别结果**逐题可改**，
 编号会自动避开已有文件，绝不覆盖。章节留空时，笔记直接放在科目目录下，不再套一层同名文件夹。
 
+> **增题页是「按当前这本」生成的**：在好题页增题，标题写「加新好题」、没有错因字段、
+> 编号从好题本自己的 01 排起，提示词要求写进 `好题本/`。
+
 > **答案与解析留空。** 程序不会解题。点「📋 复制提示词给 AI」，
-> 提示词里已经带好了完整格式规范，发给 AI（或我）就能拿到带答案的成品。
+> 提示词里已经带好了完整格式规范 **+ 已有全部题型通解**，发给 AI（或我）就能拿到
+> 带答案、并且**已经归好类**的成品。
+
+### 📄 本题原文（只读）
+
+程序和 Obsidian 是同一批文件，所以看原文不用切窗口：
+
+- 题目详情里有 **📄 本题原文**：直接打开这道题自己的 `.md`
+- 原文页就是一篇**真的笔记**：标题、引用标注、表格、`$公式$`（KaTeX）、
+  `![[图片.png]]`（走本机只读的 `/api/asset`，认 Obsidian 的图片路径）都会渲染
+- 笔记里的 `[[双链]]` 是**可点的** —— 点了直接跳到那篇笔记，可以顺着笔记一路看下去
+- 右上角 **看源码** 可以切到未经渲染的原文；`frontmatter` 折叠在页面底部
+
+> 增题提示词里也要求 AI 顺手在 frontmatter 里填 `notes:` 双链（只填真实存在的笔记），
+> 记下这道题和哪几篇笔记有关：
+
+```yaml
+notes:
+  - "[[03-函数极限的概念与性质]]"
+```
 
 ---
 
@@ -207,11 +256,11 @@ related:
 
 **不直接存你的原图。** 流程是：
 
-1. 增题页把截图拖进去（可多张，暂存于 `错题本-app/uploads/`）
-2. 选好这批题的错因，点 **📋 生成提示词**
+1. 增题页把截图拖进去（可多张，暂存于 `study-app/uploads/`）
+2. 选好这批题的错因（好题本没有这一项），点 **📋 生成提示词**
 3. 把提示词发给 AI（或我）
 4. AI 看懂图后：**用文字 + LaTeX 重写题干**，题里如果有图形，**写代码重新画一张**存进
-   `错题本/picture/`，再引用 —— 不会把原图贴进笔记
+   当前这本的 `picture/` 目录，再引用 —— 不会把原图贴进笔记
 
 ---
 
@@ -223,7 +272,20 @@ related:
 | `backups/YYYY-MM-DD/` | 每次写入前的自动备份（同一天同一篇只留首次备份） |
 | `data/questions.json` | 导出的机器可读快照 |
 | `data/stats.md` | 导出的 Markdown 统计报告 |
-| `config.json` | 错题本路径、端口、监听地址 |
+| `config.json` | 路径与端口配置（见下表） |
+
+`config.json` 的字段（都是相对仓库根目录的目录名）：
+
+| 字段 | 默认 | 作用 |
+| --- | --- | --- |
+| `vaultDir` | `..` | 仓库根（Obsidian 库） |
+| `notebookDir` | `错题本` | 错题本目录 |
+| `goodDir` | `好题本` | 好题本目录 |
+| `patternDir` | `题型本` | 题型通解目录 |
+| `noteDirs` | `["高等数学", …]` | 学习笔记目录：原文页和双链跳转只允许读这些目录（加上各题本、计划、复盘） |
+| `planDir` / `reviewDir` | `考研` / `复盘` | 计划与复盘 |
+| `examDate` | `2027-12-18` | 首页倒计时 |
+| `port` / `host` | `4173` / `127.0.0.1` | 监听地址 |
 
 **没有任何隐藏数据库。** 删掉程序目录，错题本一个字节都不会少。
 
@@ -321,10 +383,13 @@ POST  /api/reason       { id, reason }                   改首次错因
 POST  /api/upload       { name, dataUrl }                上传图片（暂存）
 GET   /api/uploads                                       暂存的图片列表
 DELETE /api/uploads     { names? }                       删除暂存图片
-POST  /api/prompt-images { names[], reason? }            生成「图片转题目」提示词
-POST  /api/detect       { raw, mode }           识别粘贴的题干，不写盘
-POST  /api/new          { items }               批量建题（写盘）
-POST  /api/prompt       { stems, category?, subject?, chapter? }   生成给 AI 的提示词
+POST  /api/prompt-images { names[], reason?, book? }      生成「图片转题目」提示词
+POST  /api/detect       { raw, mode, book? }     识别粘贴的题干（编号按 book 这本排），不写盘
+POST  /api/new          { items, book? }         批量建题（写盘到 book 这本）
+POST  /api/prompt       { stems, category?, subject?, chapter?, book? }   生成给 AI 的提示词
+GET   /api/raw?rel=                              只读看一篇笔记原文（白名单目录里的 .md）
+GET   /api/asset?rel=                            只读取笔记里的图片（![[图片.png]]）
+GET   /api/note?name=                            把 Obsidian 双链解析成程序里的路径
 POST  /api/export                               导出 questions.json 与 stats.md
 ```
 
@@ -333,7 +398,7 @@ POST  /api/export                               导出 questions.json 与 stats.
 ## 目录结构
 
 ```
-错题本-app/
+study-app/
 ├── 启动错题本.command      双击启动
 ├── config.json             配置
 ├── server.mjs              零依赖 HTTP 服务
@@ -350,35 +415,40 @@ POST  /api/export                               导出 questions.json 与 stats.
 │   └── notebook.mjs        配置、缓存、读写编排
 ├── public/
 │   ├── index.html / style.css / app.js
-│   ├── markdown.js         极简 Markdown + LaTeX 渲染
+│   ├── markdown.js         极简 Markdown + LaTeX 渲染（含 Obsidian 图片 / 双链）
 │   └── vendor/katex/       离线内置的 KaTeX（含字体）
-├── scripts/migrate.mjs     一次性迁移脚本（旧结构 → 三级结构）
-├── test/e2e.mjs            无头浏览器端到端测试（71 项断言）
+├── test/e2e.mjs            无头浏览器端到端测试（122 项断言）
 ├── scripts/
 │   ├── migrate.mjs         一次性迁移脚本（旧结构 → 三级结构）
 │   └── date-plans.mjs      给周计划里的任务批量补日期
+├── uploads/                图片暂存（不入库）
 ├── backups/                自动备份（不入库）
 └── data/                   导出（不入库）
 ```
 
+仓库根上还有个 `.e2e-runtime/`，是跑端到端测试时用的仓库副本与截图，随时可以删。
+
 ## 自动化测试
 
-`test/e2e.mjs` 用无头 Edge 真的点一遍界面，**必须跑在副本上，绝不动真数据**：
+`test/e2e.mjs` 用无头 Edge 真的点一遍界面。这个测试**是有状态的**（会打卡、建题、改计划），
+所以**每一轮都要先把仓库复制一份**，绝不动真数据 —— 一条命令搞定：
 
 ```bash
-cp -R 错题本 /tmp/notebook-test
-NOTEBOOK_DIR=/tmp/notebook-test NOTEBOOK_PORT=4199 node server.mjs --no-open &
-"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
-  --headless=old --disable-gpu --no-sandbox --remote-allow-origins='*' \
-  --remote-debugging-port=9333 --user-data-dir=/tmp/edge-e2e \
-  --window-size=1500,1150 "http://127.0.0.1:4199/" &
-node test/e2e.mjs          # 截图输出到 /tmp/e2e-*.png
+cd study-app
+bash test/run-e2e.sh          # KEEP=1 bash test/run-e2e.sh 可以跑完不关服务
 ```
 
-覆盖：**今日倒计时/今日任务/本月进度/勾选写回计划**、**计划页分组与复选框**、
+它会：把仓库复制到 `study-app/.e2e-runtime/vault/` → 用 `VAULT_DIR` 起服务（备份/上传/导出
+也一并改道到 `.e2e-runtime/`）→ 起无头 Edge → 跑断言 → 截图落到 `.e2e-runtime/shots/`。
+`study-app/` 已在 Obsidian 的忽略列表里，副本不会出现在库里。
+
+覆盖（122 项）：**今日倒计时/今日任务/本月进度/勾选写回计划**、**计划页分组与复选框**、
 **复盘自动归档与切日期**、四层总览下钻、顶栏范围选择器、题库筛选、抽屉预览、**全屏做题模式**、
 错因选择与写回、考点标签增删、复习换范围/混刷/章节多选/键盘流/成绩单、
-遗忘曲线提醒、用时记录、**图片上传与提示词生成**、增题识别与落盘、深浅色主题。
+遗忘曲线提醒、用时记录、**图片上传与提示词生成**、增题识别与落盘、深浅色主题，
+以及**好题本的独立性**（统计/题库/编号/增题提示词都不串本、换书收回「全部共通」筛选、
+键盘快捷键同样可用）、**题型大屏**、**原文页**（本题原文、图片、双链跳转、源码切换）、
+**顶栏范围按钮的位置**（在「复盘」右边）。
 
 ## 手机上用
 

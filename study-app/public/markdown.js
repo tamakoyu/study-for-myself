@@ -37,7 +37,28 @@ function renderMath(tex, displayMode) {
   return `<code class="math-fallback">${escapeHtml(src)}</code>`;
 }
 
-/** 行内语法：代码 → 粗体 → 斜体 → 链接 → 删除线 */
+/** Obsidian 图片嵌入 ![[图片.png]] / ![[图片.png|宽度]] → 走本机只读的 /api/asset */
+export function embedImage(target, width) {
+  const rel = String(target || '').trim();
+  if (!rel || /^https?:/i.test(rel)) {
+    return `<img class="md-img" src="${escapeHtml(rel)}" alt="" loading="lazy" />`;
+  }
+  const w = width ? ` style="max-width:${Number(width)}px"` : '';
+  return `<img class="md-img" src="/api/asset?rel=${encodeURIComponent(rel)}" alt="${escapeHtml(
+    rel.split('/').pop()
+  )}" loading="lazy"${w} />`;
+}
+
+/** Obsidian 双链 [[笔记]] / [[笔记|别名]] → 可点，点了由 app.js 打开那篇笔记 */
+export function wikiLink(target, alias) {
+  const name = String(target || '').split('#')[0].trim();
+  const text = String(alias || target || '').trim();
+  return `<a href="#" class="wikilink" data-wikilink="${escapeHtml(name)}" title="打开笔记：${escapeHtml(
+    name
+  )}">${escapeHtml(text)}</a>`;
+}
+
+/** 行内语法：代码 → 粗体 → 斜体 → 链接 → 删除线 → 图片/双链 */
 function inline(text) {
   let t = escapeHtml(text);
   t = t.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
@@ -45,6 +66,8 @@ function inline(text) {
   t = t.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
   t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
   t = t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  t = t.replace(/!\[\[([^\]|]+)(?:\|(\d+))?\]\]/g, (_m, p, w) => embedImage(p, w));
+  t = t.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target, alias) => wikiLink(target, alias));
   return t;
 }
 
@@ -80,7 +103,7 @@ function renderTable(rows) {
 }
 
 function isBlockStart(line) {
-  return /^(#{1,6}\s|>|\s*[-*+]\s|\s*\d+[.、)]\s|\||\u0000|\s*$|-{3,}\s*$)/.test(line);
+  return /^(#{1,6}\s|>|!\[\[|\s*[-*+]\s|\s*\d+[.、)]\s|\||\u0000|\s*$|-{3,}\s*$)/.test(line);
 }
 
 /** 块级解析 */
@@ -95,6 +118,14 @@ function blocks(lines) {
     // 已被抽出的公式
     if (/^\u0000\$\d+\u0000$/.test(line.trim())) {
       out.push(`<div class="math-display">${line.trim()}</div>`);
+      i++;
+      continue;
+    }
+
+    // 独占一行的 Obsidian 图片嵌入 ![[图.png]] / ![[图.png|400]]
+    const embed = line.trim().match(/^!\[\[([^\]|]+)(?:\|(\d+))?\]\]$/);
+    if (embed) {
+      out.push(`<figure class="md-figure">${embedImage(embed[1], embed[2])}</figure>`);
       i++;
       continue;
     }

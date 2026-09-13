@@ -5,6 +5,7 @@
 !/study-app/
 
 # 机器产物，永远不入库
+study-app/.e2e-runtime/
 study-app/backups/
 study-app/data/
 study-app/uploads/

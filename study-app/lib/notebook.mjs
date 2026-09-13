@@ -6,11 +6,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanNotebook, buildTree, today } from './parse.mjs';
+import { walkMarkdown } from './vault.mjs';
 import { computeStats, filterByScope } from './stats.mjs';
 import { recordCheckin, undoCheckin, setMeta, setPoints, setReason, backup } from './write.mjs';
 import {
   chapterOptions, createQuestions, splitProblems, detect as detectByKeywords, detectType,
-  normalizeMath, slugOf, buildPrompt, buildImagePrompt, nextNumber as nextNumberFor,
+  normalizeMath, slugOf, buildPrompt, buildImagePrompt, nextNumber as nextNumberFor, bookOf,
 } from './create.mjs';
 import { TAXONOMY, UNCLASSIFIED } from './taxonomy.mjs';
 import { scanPatterns, unlinkedProblems } from './patterns.mjs';
@@ -25,6 +26,7 @@ export function loadConfig() {
     notebookDir: '错题本',        // 错题本
     goodDir: '好题本',            // 好题本（同结构，但没有错因分析）
     patternDir: '题型本',          // 题型大全：每个题型一篇「通解」
+    noteDirs: ['高等数学', '高数上知识前探', '数据结构', '费曼自测清单', '公式本'],  // 笔记目录：原文页、双链跳转
     planDir: '考研',
     reviewDir: '复盘',
     examDate: '2027-12-18',
@@ -43,29 +45,28 @@ export function loadConfig() {
       console.warn(`[config] config.json 解析失败，改用默认配置：${err.message}`);
     }
   }
-  const cfg = { ...defaults, ...user };
+  const raw = { ...defaults, ...user };
+  const cfg = { ...raw };
 
-  const appRel = (v) => path.resolve(APP_DIR, v);
-  const vaultRel = (v) => path.resolve(cfg.vaultDir, v);
+  // 仓库（Obsidian）里的目录：都相对 vaultDir 解析；程序自己的目录相对 APP_DIR
+  const vaultDir = path.resolve(APP_DIR, process.env.VAULT_DIR || raw.vaultDir);
+  const inVault = (v) => path.resolve(vaultDir, v);
+  const inApp = (v) => path.resolve(APP_DIR, v);
 
-  cfg.vaultDir = appRel(cfg.vaultDir);
-  cfg.notebookDir = vaultRel(cfg.notebookDir);
-  cfg.goodDir = vaultRel(cfg.goodDir);
-  cfg.patternDir = vaultRel(cfg.patternDir);
-  cfg.planDir = vaultRel(cfg.planDir);
-  cfg.reviewDir = vaultRel(cfg.reviewDir);
-  cfg.backupDir = appRel(cfg.backupDir);
-  cfg.exportDir = appRel(cfg.exportDir);
-  cfg.uploadDir = appRel(cfg.uploadDir);
+  cfg.vaultDir = vaultDir;
+  cfg.notebookDir = inVault(raw.notebookDir);
+  cfg.goodDir = inVault(raw.goodDir);
+  cfg.patternDir = inVault(raw.patternDir);
+  cfg.planDir = inVault(raw.planDir);
+  cfg.reviewDir = inVault(raw.reviewDir);
+  cfg.backupDir = inApp(process.env.BACKUP_DIR || raw.backupDir);
+  cfg.exportDir = inApp(process.env.EXPORT_DIR || raw.exportDir);
+  cfg.uploadDir = inApp(process.env.UPLOAD_DIR || raw.uploadDir);
 
-  // 环境变量优先，方便指向另一份仓库（做测试用）
+  // 环境变量优先，方便整套指向另一份仓库（做端到端测试用）
   if (process.env.NOTEBOOK_DIR) cfg.notebookDir = path.resolve(process.env.NOTEBOOK_DIR);
   if (process.env.GOOD_DIR) cfg.goodDir = path.resolve(process.env.GOOD_DIR);
-  if (process.env.VAULT_DIR) {
-    cfg.vaultDir = path.resolve(process.env.VAULT_DIR);
-    cfg.planDir = path.join(cfg.vaultDir, String(cfg.planDirRel || '考研'));
-    cfg.reviewDir = path.join(cfg.vaultDir, String(cfg.reviewDir || '复盘'));
-  }
+  if (process.env.PATTERN_DIR) cfg.patternDir = path.resolve(process.env.PATTERN_DIR);
   if (process.env.NOTEBOOK_PORT) cfg.port = Number(process.env.NOTEBOOK_PORT);
   return cfg;
 }
@@ -78,7 +79,11 @@ export function snapshot(cfg, { force = false } = {}) {
   if (!force && cache.data && now - cache.at < 1000) return cache.data;
   const a = scanNotebook(cfg.notebookDir, 'mistakes');
   const b = fs.existsSync(cfg.goodDir) ? scanNotebook(cfg.goodDir, 'good') : { problems: [], errors: [], tree: [] };
-  const problems = [...a.problems, ...b.problems];
+  // relPath 是「相对某一本书」的；原件在仓库里的位置另算一个 vaultRel（看原文、跳转都要用）
+  const problems = [...a.problems, ...b.problems].map((p) => ({
+    ...p,
+    vaultRel: path.relative(cfg.vaultDir, p.absPath).split(path.sep).join('/'),
+  }));
   const errors = [...a.errors, ...b.errors];
   const tree = buildTree(problems);
   const data = {
@@ -89,6 +94,7 @@ export function snapshot(cfg, { force = false } = {}) {
     taxonomy: TAXONOMY,
     stats: computeStats(problems, tree),
     notebookDir: cfg.notebookDir,
+    goodDir: cfg.goodDir,
   };
   cache = { at: now, data };
   return data;
@@ -165,7 +171,8 @@ export function updatePoints(cfg, id, points) {
 /* ---------------- 增题 ---------------- */
 
 /** 只做识别与预览，不写盘 */
-export function detect(cfg, raw, mode = 'rule') {
+export function detect(cfg, raw, mode = 'rule', book = 'mistakes') {
+  const bookRoot = bookRootOf(cfg, book);
   const parts = splitProblems(raw, mode);
   const items = parts.map((stem, index) => {
     const guessed = detectByKeywords(stem);
@@ -182,18 +189,18 @@ export function detect(cfg, raw, mode = 'rule') {
     };
   });
 
-  // 同科目同章节的编号接着往下排
+  // 同科目同章节的编号接着往下排（编号只看当前这本，错题与好题各排各的）
   const counters = new Map();
   for (const it of items) {
     const sub = it.subject || UNCLASSIFIED;
     if (!counters.has(sub)) counters.set(sub, new Map());
     const byChapter = counters.get(sub);
     const ch = it.chapter || sub;
-    if (!byChapter.has(ch)) byChapter.set(ch, nextNumberFor(cfg.notebookDir, it.category, sub, ch));
+    if (!byChapter.has(ch)) byChapter.set(ch, nextNumberFor(bookRoot, it.category, sub, ch));
     it.num = byChapter.get(ch);
     byChapter.set(ch, it.num + 1);
   }
-  return { items, count: items.length, mode };
+  return { items, count: items.length, mode, book: bookOf(book).key };
 }
 
 /** 批量建题（写盘） */
@@ -207,11 +214,23 @@ export function addQuestions(cfg, items, book = 'mistakes') {
   return { ok: true, created, total: snapshot(cfg, { force: true }).problems.length };
 }
 
-/** 生成给 AI 用的提示词 */
+/** 一本书的根目录：错题本 or 好题本 */
+export function bookRootOf(cfg, book = 'mistakes') {
+  return bookOf(book).key === 'good' ? cfg.goodDir : cfg.notebookDir;
+}
+
+/** 生成给 AI 用的提示词（按「哪一本」生成：错题本 / 好题本） */
 export function promptFor(cfg, stems, scope = {}) {
+  const { patterns } = patternsSnapshot(cfg);
   return {
-    prompt: buildPrompt(Array.isArray(stems) ? stems : [stems], scope),
+    prompt: buildPrompt(Array.isArray(stems) ? stems : [stems], {
+      ...scope,
+      patterns,
+      noteDirs: cfg.noteDirs || [],
+    }),
     options: chapterOptions(),
+    patternCount: patterns.length,
+    book: bookOf(scope.book).key,
   };
 }
 
@@ -390,5 +409,98 @@ export function deleteUploads(cfg, names) {
 /** 生成「把图片转成题目」的提示词 */
 export function promptForImages(cfg, files, opts = {}) {
   const paths = (files || []).map((f) => path.join(cfg.uploadDir, path.basename(f)));
-  return { prompt: buildImagePrompt(paths, opts), paths };
+  return { prompt: buildImagePrompt(paths, opts), paths, book: bookOf(opts.book).key };
+}
+
+/* ---------------- 原文查看（只读） ---------------- */
+
+/** 允许在程序里看原文的目录白名单 */
+function readableRoots(cfg) {
+  return [
+    cfg.notebookDir, cfg.goodDir, cfg.patternDir, cfg.planDir, cfg.reviewDir,
+    // 学习笔记目录（原文页、双链跳转要能打开）
+    ...cfg.noteDirs.map((d) => path.join(cfg.vaultDir, d)),
+    // 笔记里的 ![[图片]]：Obsidian 习惯放在 picture/ 或任意笔记目录里
+    path.join(cfg.vaultDir, 'picture'),
+  ];
+}
+
+const ASSET_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.avif']);
+
+/** 把仓库相对路径解析成绝对路径，并确认在可读白名单里 */
+function safeVaultPath(cfg, rel, { exts, what }) {
+  const clean = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!clean || clean.includes('..')) throw Object.assign(new Error('非法路径'), { status: 400 });
+  const abs = path.resolve(cfg.vaultDir, clean);
+  const ok = readableRoots(cfg).some((r) => abs === r || abs.startsWith(r + path.sep));
+  if (!ok) throw Object.assign(new Error('这个路径不在可读范围内'), { status: 403 });
+  if (!exts.has(path.extname(abs).toLowerCase())) {
+    throw Object.assign(new Error(`只能看 ${what}`), { status: 400 });
+  }
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+    throw Object.assign(new Error('文件不存在'), { status: 404 });
+  }
+  return abs;
+}
+
+export function readRaw(cfg, rel) {
+  const abs = safeVaultPath(cfg, rel, { exts: new Set(['.md']), what: '.md' });
+  const st = fs.statSync(abs);
+  return {
+    rel: path.relative(cfg.vaultDir, abs).split(path.sep).join('/'),
+    name: path.basename(abs, '.md'),
+    content: fs.readFileSync(abs, 'utf8'),
+    size: st.size,
+    mtime: st.mtimeMs,
+  };
+}
+
+/** 笔记里 ![[xxx.png]] 用得到的图片（只读，只允许白名单目录 + 图片后缀） */
+export function readAsset(cfg, rel) {
+  const abs = safeVaultPath(cfg, rel, { exts: ASSET_EXT, what: '图片' });
+  return { abs, name: path.basename(abs) };
+}
+
+/** 笔记目录（解析双链、找原文用） */
+function noteRoots(cfg) {
+  return cfg.noteDirs.map((d) => path.join(cfg.vaultDir, d)).filter((d) => fs.existsSync(d));
+}
+
+/** 预扫一遍笔记文件名，供双链解析用（带缓存，避免每次点击都全盘扫） */
+let noteIndexCache = { at: 0, byName: new Map(), byRel: new Map() };
+function noteIndex(cfg) {
+  const now = Date.now();
+  if (now - noteIndexCache.at < 5000 && noteIndexCache.byName.size) return noteIndexCache;
+  const byName = new Map();
+  const byRel = new Map();
+  const roots = [...noteRoots(cfg), cfg.notebookDir, cfg.goodDir, cfg.patternDir];
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue;
+    for (const f of walkMarkdown(root)) {
+      const rel = path.relative(cfg.vaultDir, f.abs).split(path.sep).join('/');
+      const base = path.basename(f.abs, '.md');
+      byRel.set(rel, { rel, name: base, abs: f.abs, size: f.size, mtime: f.mtime });
+      byRel.set(rel.replace(/\.md$/, ''), { rel, name: base, abs: f.abs, size: f.size, mtime: f.mtime });
+      if (!byName.has(base)) byName.set(base, []);
+      byName.get(base).push({ rel, name: base, abs: f.abs, size: f.size, mtime: f.mtime });
+    }
+  }
+  noteIndexCache = { at: now, byName, byRel };
+  return noteIndexCache;
+}
+
+/** 把 Obsidian 双链目标解析成仓库里的真实笔记：[[名字]] / [[名字|别名]] / [[路径/名字]] / [[名字#小标题]] */
+export function resolveNote(cfg, target) {
+  const raw = String(target || '').split('|')[0].split('#')[0].trim().replace(/\\/g, '/');
+  if (!raw) throw Object.assign(new Error('空的链接'), { status: 400 });
+  const { byName, byRel } = noteIndex(cfg);
+  const rel = byRel.get(raw) || byRel.get(`${raw}.md`);
+  if (rel) return rel;
+  const cands = byName.get(path.basename(raw)) || [];
+  if (cands.length) {
+    // 同名笔记有多份时，优先和链接里给的路径片段对得上的那份
+    const prefer = cands.find((c) => raw.includes('/') && c.rel.endsWith(raw)) || cands[0];
+    return prefer;
+  }
+  throw Object.assign(new Error(`找不到笔记「${raw}」`), { status: 404 });
 }

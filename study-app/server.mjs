@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import {
   loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, updatePoints, updateReason,
   exportAll, saveUpload, listUploads, deleteUploads, promptForImages,
-  patternsSnapshot, patternPrompt, APP_DIR,
+  patternsSnapshot, patternPrompt, readRaw, readAsset, resolveNote, APP_DIR,
 } from './lib/notebook.mjs';
 import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.mjs';
 import { chapterOptions } from './lib/create.mjs';
@@ -200,7 +200,7 @@ async function main() {
 
       if (p === '/api/detect' && req.method === 'POST') {
         const body = await readBody(req);
-        sendJson(res, 200, detectItems(cfg, body.raw, body.mode));
+        sendJson(res, 200, detectItems(cfg, body.raw, body.mode, body.book));
         return;
       }
 
@@ -248,6 +248,30 @@ async function main() {
 
       if (p === '/api/weekly' && req.method === 'GET') {
         sendJson(res, 200, buildWeekly(cfg, snapshot(cfg).stats));
+        return;
+      }
+
+      if (p === '/api/raw' && req.method === 'GET') {
+        sendJson(res, 200, readRaw(cfg, url.searchParams.get('rel')));
+        return;
+      }
+
+      /* 笔记里的 ![[图片]]：只读、只允许白名单目录里的图片后缀 */
+      if (p === '/api/asset' && req.method === 'GET') {
+        const asset = readAsset(cfg, url.searchParams.get('rel'));
+        const st = fs.statSync(asset.abs);
+        res.writeHead(200, {
+          'Content-Type': MIME[path.extname(asset.abs).toLowerCase()] || 'application/octet-stream',
+          'Content-Length': st.size,
+          'Cache-Control': 'no-cache',
+        });
+        fs.createReadStream(asset.abs).pipe(res);
+        return;
+      }
+
+      /* 把 Obsidian 双链 [[笔记名]] 解析成程序里能打开的路径 */
+      if (p === '/api/note' && req.method === 'GET') {
+        sendJson(res, 200, resolveNote(cfg, url.searchParams.get('name')));
         return;
       }
 

@@ -113,7 +113,7 @@ ${kind === 'good' ? '' : `## 错因分析
 `}## 打卡记录
 
 > 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。
-> 做错的记一下错因，程序会统计你到底是怎么错的。
+${kind === 'good' ? '' : '> 做错的记一下错因，程序会统计你到底是怎么错的。\n'}
 
 - [ ] 第 1 次 · 完美
 - [ ] 第 1 次 · 普通
@@ -201,27 +201,67 @@ export function chapterOptions() {
   );
 }
 
-/** 生成一段可以直接丢给 AI 的提示词 */
-export function buildPrompt(stems, { category, subject, chapter, reason, intro } = {}) {
+/**
+ * 两本书的差异全部集中在这里：目录、标签、id 前缀、要不要错因。
+ * 错题本 / 好题本除了这几项以外**格式完全一样**，所以下面共用同一套模板。
+ */
+export const BOOKS = {
+  mistakes: { key: 'mistakes', dir: '错题本', tag: '错题本', label: '错题本', noun: '错题', idPrefix: 'mistakes' },
+  good: { key: 'good', dir: '好题本', tag: '好题本', label: '好题本', noun: '好题', idPrefix: 'good' },
+};
+
+export function bookOf(book) {
+  return BOOKS[book] || BOOKS.mistakes;
+}
+
+/** 生成一段可以直接丢给 AI 的提示词（按「哪一本」生成：错题本 / 好题本） */
+export function buildPrompt(
+  stems,
+  { book = 'mistakes', category, subject, chapter, reason, intro, patterns = [], noteDirs = [] } = {}
+) {
+  const bk = bookOf(book);
   const body = stems.map((s, i) => `【第 ${i + 1} 题】\n${s}`).join('\n\n');
   const hint = [category, subject, chapter].filter(Boolean).join(' / ');
-  const reasonLine = reason
-    ? `这批题的错因是「${reason}」，请写进每篇的 \`**首次错因**\`。\n`
-    : `**另外：每道题的 \`**首次错因**\` 先留「⏳ 待补充」，并在回复里问我这几道题分别是怎么错的。**\n`;
-  return `${intro ? `${intro}\n\n` : ''}请把下面${stems.length > 1 ? ` ${stems.length} 道题` : '这道题'}做成我的错题本笔记，一题一篇。
+  const reasonLine =
+    bk.key === 'good'
+      ? `这是一道**好题**（做对了、但方法漂亮或值得反复回的题），**不要写 \`## 错因分析\` 区块**。\n`
+      : reason
+        ? `这批题的错因是「${reason}」，请写进每篇的 \`**首次错因**\`。\n`
+        : `**另外：每道题的 \`**首次错因**\` 先留「⏳ 待补充」，并在回复里问我这几道题分别是怎么错的。**\n`;
+  const reasonBlock =
+    bk.key === 'good'
+      ? ''
+      : `## 错因分析
+
+> [!question]- 展开 · 错因（做题时别看）
+> **首次错因**　${reason || '⏳ 待补充'}
+
+`;
+  const noteHint = noteDirs.length
+    ? `\n**关联笔记**：我的学习笔记放在这些目录里 —— ${noteDirs.map((d) => `\`${d}/\``).join('、')}。
+如果这道题考的知识点在某个笔记文件里有对应讲解，请在 frontmatter 里补一行 \`notes:\`（没有就整个 key 省略，不要编）：
+
+\`\`\`yaml
+notes:
+  - "[[03-函数极限的概念与性质]]"
+\`\`\`
+
+写成 Obsidian 双链，**只填真实存在的笔记文件名，不要编造**；不确定就省略这一项。\n`
+    : '';
+  return `${intro ? `${intro}\n\n` : ''}请把下面${stems.length > 1 ? ` ${stems.length} 道题` : '这道题'}做成我的${bk.label}笔记，一题一篇。
 
 ${reasonLine}
-结构：\`错题本/<大类>/<科目>/<章节>/<章节>-NN-<短标题>.md\`
+结构：\`${bk.dir}/<大类>/<科目>/<章节>/<章节>-NN-<短标题>.md\`
 - 大类：数学 或 408
 - 数学的科目：高数 / 线代 / 概率论
 - 408 的科目：数据结构 / 计算机组成原理 / 操作系统 / 计算机网络
 - 章节：数学用标准章名（极限、连续、导数、微分、一元函数积分学、行列式、矩阵、随机事件与概率…）
-${hint ? `\n我的初步判断是「${hint}」，如果不合适请自行更正。\n` : ''}
+${hint ? `\n我的初步判断是「${hint}」，如果不合适请自行更正。\n` : ''}${noteHint}
 每篇格式必须严格是这样：
 
 ---
 tags:
-  - 错题本
+  - ${bk.tag}
   - <科目名>
   - <章节名>
 type: <题型>
@@ -261,10 +301,10 @@ heat: <五格，用 ☆ 补满，如 🔥🔥🔥🔥☆>
 > [!warning]- 展开 · 易错提醒
 > <本题特有的坑>
 
-## 打卡记录
+${reasonBlock}## 打卡记录
 
 > 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。
-> 做错的记一下错因，程序会统计你到底是怎么错的。
+${bk.key === 'good' ? '' : '> 做错的记一下错因，程序会统计你到底是怎么错的。\n'}
 
 - [ ] 第 1 次 · 完美
 - [ ] 第 1 次 · 普通
@@ -286,6 +326,59 @@ heat: <五格，用 ☆ 补满，如 🔥🔥🔥🔥☆>
 5. 难度 ⭐ 五格、热度 🔥 五格，都要用 ☆ 补满。
 6. 不要改动我已有的文件，只新建。
 
+---
+
+## 最后一步：顺手归类到「题型本」（必做）
+
+题目写完后，请把这${stems.length > 1 ? '些' : ''}新题也归入题型本 —— 题型本记的是「这类题怎么做」，一个题型只有一份通解。
+
+**已有的通解**（${patterns.length} 份）：
+${
+  patterns.length
+    ? patterns.map((x) => `- \`${x.rel}\`：${x.title}（${x.type || '未标'}，已关联 ${x.related.length} 题）`).join('\n')
+    : '（题型本还是空的，这是第一批）'
+}
+
+**规则**：
+1. 新题如果属于上面某个已有题型 → **只把新题的 id 追加到那份通解的 \`related:\` 里**，不要新建文件，也不要动通解正文。
+2. 如果是全新题型 → 才在 \`题型本/<大类>/<科目>/<章节>/<题型名>.md\` 新建一份通解。
+3. 通解格式：
+
+---
+tags:
+  - 题型本
+  - <科目>
+  - <章节>
+type: 通解
+category: <题型>
+difficulty: <五格 ☆ 补满>
+heat: <五格 ☆ 补满>
+related:
+  - <题目 id，一行一个，原样照抄>
+---
+
+# <题型名，一眼看懂这招干什么>
+
+## 适用特征
+
+- <看到什么样的题就该想到它>
+
+## 通解步骤
+
+1. <可执行的步骤>
+
+## 例题
+
+- <题目 id>　<一句话说明怎么套>
+
+## 易错点
+
+- <这类题最容易错在哪>
+
+题目 id 的格式是 \`mistakes:<文件名去掉.md>\`（错题）或 \`good:<文件名去掉.md>\`（好题）。**这一批是 ${bk.label}，前缀必须用 \`${bk.idPrefix}:\`。**
+
+---
+
 ${body}`;
 }
 
@@ -295,8 +388,9 @@ ${body}`;
  */
 export function buildImagePrompt(paths, opts = {}) {
   const n = paths.length;
+  const bk = bookOf(opts.book);
   const intro = [
-    `我上传了 ${n} 张题目图片，请你把它们逐张转成我的错题本笔记。`,
+    `我上传了 ${n} 张题目图片，请你把它们逐张转成我的${bk.label}笔记。`,
     '',
     '**第一步：读图。** 图片就在本机这些路径上，直接读：',
     ...paths.map((p, i) => `  ${i + 1}. ${p}`),
@@ -304,7 +398,7 @@ export function buildImagePrompt(paths, opts = {}) {
     '**第二步：按下面的规矩写题（这几条最重要）。**',
     '1. **不要把我上传的原图直接放进笔记。** 请你看懂图里的内容之后，用**文字 + LaTeX** 把题干重写出来。',
     '2. **图里有图形的（函数图像、几何图、二叉树、流程图、电路图、地址划分图…），请写代码重新画一张**：',
-    '   用 Python(matplotlib) 或手写 SVG 生成图片，存到 `错题本/picture/` 下，再在笔记里用 `![[文件名]]` 引用。',
+    `   用 Python(matplotlib) 或手写 SVG 生成图片，存到 \`${bk.dir}/picture/\` 下，再在笔记里用 \`![[文件名]]\` 引用。`,
     '   要求：清晰、坐标/标注完整、信息与原图一致，风格与笔记整体协调。',
     '3. 图里手写模糊、印刷不清的地方，按最合理的理解补全，并在解析里说明你补了什么假设。',
     '4. 一张图里有多道题的，拆成多篇。',

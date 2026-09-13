@@ -48,6 +48,8 @@ export function scanPatterns(patternDir, vaultDir, problems = []) {
   const patterns = files.map((f) => {
     const text = readText(f.abs);
     const { data, body } = parseFront(text);
+    // f.rel 是相对 patternDir 的；对外要用相对 vault 的路径（原文查看、跳转都靠它）
+    const vaultRel = path.relative(vaultDir, f.abs).split(path.sep).join('/');
     const segs = f.rel.split('/').slice(0, -1);
     const category = segs[0] || '未分类';
     const subject = segs[1] || '未分类';
@@ -85,7 +87,7 @@ export function scanPatterns(patternDir, vaultDir, problems = []) {
 
     return {
       id: `${category}/${subject}/${chapter}/${path.basename(f.abs, '.md')}`,
-      rel: f.rel,
+      rel: vaultRel,
       abs: f.abs,
       title: h1,
       category,
