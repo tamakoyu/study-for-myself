@@ -42,14 +42,23 @@ export function buildToday(cfg, mistakesStats, now = new Date()) {
   const week = weekPlanFor(plans, date);
   const monthPlan = monthPlanFor(plans, month);
 
+  // 月计划文件只是索引页，任务都在周计划里 —— 所以本月进度要按当月所有周计划汇总
+  const monthWeeks = plans.filter((p) => p.kind === 'week' && p.month === month);
+  const monthTaskTotal = monthWeeks.reduce((s, p) => s + p.total, 0);
+  const monthTaskDone = monthWeeks.reduce((s, p) => s + p.done, 0);
+
   // 倒数
   const days = daysBetween(date, cfg.examDate);
 
   // 今日任务：任务文本里写了今天日期的，加上本周未标日期的待办
-  const weekTasks = week ? week.groups.flatMap((g) => g.tasks.map((t) => ({ ...t, group: g.name }))) : [];
-  const todayTasks = weekTasks.filter((t) => t.date === date);
-  const undated = weekTasks.filter((t) => !t.date && !t.done);
-  const restUndone = weekTasks.filter((t) => t.date && t.date !== date && !t.done && t.date > date);
+  const weekTasks = week ? week.taskGroups.flatMap((g) => g.tasks.map((t) => ({ ...t, group: g.name }))) : [];
+  const dailyTasks = weekTasks.filter((t) => t.daily);
+  const todayTasks = [...weekTasks.filter((t) => t.date === date && !t.daily), ...dailyTasks];
+  // 每日任务已经出现在 todayTasks 里了，这里别再列一遍
+  const undated = weekTasks.filter((t) => !t.daily && !t.date && !t.done);
+  const restUndone = weekTasks.filter(
+    (t) => !t.daily && t.date && t.date !== date && !t.done && t.date > date
+  );
 
   const doneOf = (list) => list.filter((t) => t.done).length;
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -61,7 +70,7 @@ export function buildToday(cfg, mistakesStats, now = new Date()) {
   // 本周每一天的完成情况（按任务自带的日期聚合）
   const byDay = {};
   for (const t of weekTasks) {
-    if (!t.date) continue;
+    if (!t.date || t.daily) continue;
     byDay[t.date] = byDay[t.date] || { total: 0, done: 0 };
     byDay[t.date].total += 1;
     if (t.done) byDay[t.date].done += 1;
@@ -103,9 +112,14 @@ export function buildToday(cfg, mistakesStats, now = new Date()) {
           days: weekDays,
         }
       : null,
-    monthPlan: monthPlan
-      ? { rel: monthPlan.rel, title: monthPlan.h1, total: monthPlan.total, done: monthPlan.done, rate: monthPlan.rate }
-      : null,
+    monthPlan: {
+      rel: monthPlan ? monthPlan.rel : null,
+      title: monthPlan ? monthPlan.h1 : `${month} 月`,
+      total: monthTaskTotal,
+      done: monthTaskDone,
+      rate: monthTaskTotal ? Math.round((monthTaskDone / monthTaskTotal) * 100) : 0,
+      weeks: monthWeeks.length,
+    },
     todayTasks,
     undated,
     restUndone: restUndone.slice(0, 12),

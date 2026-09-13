@@ -126,6 +126,14 @@ const cdExpect = Math.round((new Date('2027-12-18T00:00:00') - new Date(new Date
 check('今日：考研倒计时', cdDays.startsWith(String(cdExpect)), `显示 ${cdDays}，应为 ${cdExpect} 天`);
 const todayTaskCount = await s.js(`return document.querySelectorAll('.task-list input[data-task]').length;`);
 check('今日：列出今日与本周待办', todayTaskCount >= 1, `${todayTaskCount} 条`);
+const progRows = await s.js(
+  `return [...document.querySelectorAll('.prog-row')].map(r=>r.textContent.replace(/\\s+/g,' ').trim());`
+);
+check(
+  '今日：本月进度不为 0（按当月周计划汇总）',
+  progRows.some((r) => r.includes('本月完成') && !/本月完成 0\/0/.test(r) && !r.includes('0/0')),
+  progRows.join(' ｜ ')
+);
 const dayCells = await s.js(`return document.querySelectorAll('.day-cell').length;`);
 check('今日：本周 7 天进度条', dayCells === 7, `${dayCells} 格`);
 const todayStats = await s.js(`return [...document.querySelectorAll('.stat-card .stat-label')].map(x=>x.textContent.trim()).join(' | ');`);
@@ -169,19 +177,6 @@ const planBoxes = await s.js(`return document.querySelectorAll('.plan-body input
 check('计划：渲染出可勾选的任务', planBoxes >= 5, `${planBoxes} 个复选框`);
 await s.shot('16-plan');
 
-/* ---------- 0.6 笔记页 ---------- */
-await s.js(`document.querySelector('.tab[data-module="notes"]').click();`);
-await sleep(1800);
-await s.waitFor('.nt-file');
-const noteFiles = await s.js(`return document.querySelectorAll('.nt-file').length;`);
-check('笔记：目录树列出笔记', noteFiles >= 10, `${noteFiles} 篇`);
-await s.js(`document.querySelectorAll('.nt-file')[0].click();`);
-await sleep(1500);
-const noteBody = await s.js(`return (document.querySelector('.note-body')?.textContent || '').length;`);
-check('笔记：渲染正文', noteBody > 100, `${noteBody} 字`);
-check('笔记：公式用 KaTeX 渲染', (await s.js(`return document.querySelectorAll('.note-body .katex').length;`)) > 0);
-await s.shot('17-notes');
-
 /* ---------- 0.7 复盘页 ---------- */
 await s.js(`document.querySelector('.tab[data-module="journal"]').click();`);
 await sleep(1800);
@@ -199,6 +194,20 @@ const jRead = await (await fetch(`${APP}/api/review?date=${new Date().toISOStrin
 check('复盘：保存后文件已生成', jRead.exists && jRead.content.includes('E2E 测试'), jRead.rel);
 await s.shot('18-journal');
 
+// 切到前一天
+const beforeDate = await s.js(`return document.getElementById('journalDate').value;`);
+await s.js(`document.querySelector('[data-journal-move="-1"]').click();`);
+await sleep(1500);
+const prevDate = await s.js(`return document.getElementById('journalDate').value;`);
+check('复盘：能切到前一天', prevDate < beforeDate, `${beforeDate} → ${prevDate}`);
+const prevPath = await s.js(`return document.querySelector('.plan-meta code')?.textContent.trim() || '';`);
+check('复盘：路径跟着日期变', prevPath !== jPath && prevPath.endsWith('复盘.md'), prevPath);
+await s.js(`document.querySelector('[data-journal-move="0"]').click();`);
+await sleep(1400);
+const backToday = await s.js(`return document.getElementById('journalDate').value;`);
+check('复盘：能一键回今天', backToday === beforeDate, backToday);
+check('复盘：左侧历史列表可点', (await s.js(`return document.querySelectorAll('.j-list [data-journal]').length;`)) >= 1);
+
 /* ---------- 1. 错题模块：先造一道「遗忘曲线到期」的题 ---------- */
 // 用 3 天前做「完美」的方式，让间隔 1 天的排期立刻到期（不依赖外部预置数据）
 const seedList = await (await fetch(`${APP}/api/questions`)).json();
@@ -213,6 +222,8 @@ await sleep(600);
 await s.js(`document.querySelector('.tab[data-module="mistakes"]').click();`);
 await sleep(1600);
 await s.waitFor('.category-grid');
+const tabNames = await s.js(`return [...document.querySelectorAll('.tab')].map(x=>x.textContent.trim()).join('/');`);
+check('顶栏：笔记模块已移除', !tabNames.includes('笔记') && tabNames.includes('复盘'), tabNames);
 const cats = await s.js(
   `return [...document.querySelectorAll('.category-card')].map(c=>c.querySelector('.cc-name').textContent.trim());`
 );

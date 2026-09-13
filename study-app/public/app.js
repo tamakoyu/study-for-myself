@@ -41,9 +41,9 @@ const state = {
   journal: null,
 };
 
-const MODULES = ['today', 'mistakes', 'plan', 'notes', 'journal'];
+const MODULES = ['today', 'mistakes', 'plan', 'journal'];
 const SUBVIEWS = ['dashboard', 'library', 'drill', 'add', 'solve'];
-const MODULE_LABEL = { today: '今日', mistakes: '错题', plan: '计划', notes: '笔记', journal: '复盘' };
+const MODULE_LABEL = { today: '今日', mistakes: '错题', plan: '计划', journal: '复盘' };
 
 /** 错因词表（与后端 taxonomy.mjs 保持一致） */
 const REASONS = ['概念不清', '方法不会', '思路方向错', '计算失误', '审题错误', '公式记错', '粗心大意', '时间不够'];
@@ -1731,9 +1731,11 @@ async function addPrompt() {
 
 /** 一条可勾选的任务（计划页与今日页共用） */
 function taskLi(task, { rel = '', occ = 0 } = {}) {
+  const label = task.daily ? task.text.replace(/^🔁\s*/, '') : task.text;
   return `<li class="md-task${task.done ? ' is-done' : ''}">
     <input type="checkbox" data-task="1" data-rel="${esc(rel)}" data-text="${esc(task.text)}" data-occ="${occ}"${task.done ? ' checked' : ''} />
-    <span>${esc(task.text)}</span>
+    ${task.daily ? '<span class="daily-tag">每日</span>' : ''}
+    <span>${esc(label)}</span>
     ${task.done && task.doneDate ? `<em class="task-date">✅ ${esc(task.doneDate)}</em>` : ''}
   </li>`;
 }
@@ -1979,63 +1981,6 @@ function planGroupsHtml(plan) {
 }
 
 /* ---------------- 笔记 ---------------- */
-async function loadNotes() {
-  if (state.notesTree) return;
-  try {
-    state.notesTree = await api('/api/notes');
-  } catch {
-    state.notesTree = { tree: [], count: 0 };
-  }
-}
-
-async function loadNoteDetail(rel) {
-  try {
-    state.noteDetail = await api(`/api/note?rel=${encodeURIComponent(rel)}`);
-  } catch (err) {
-    state.noteDetail = null;
-    toast(`读取笔记失败：${err.message}`, 'err');
-  }
-}
-
-function noteTreeHtml(nodes, depth = 0) {
-  return nodes
-    .map((n) => {
-      if (n.type === 'dir') {
-        return `<div class="nt-dir" style="--d:${depth}">
-          <div class="nt-name">📁 ${esc(n.name)}</div>
-          ${noteTreeHtml(n.children, depth + 1)}
-        </div>`;
-      }
-      return `<button class="nt-file${state.noteRel === n.rel ? ' is-on' : ''}" style="--d:${depth}" data-note="${esc(n.rel)}" title="${esc(n.rel)}">
-        📄 ${esc(n.name)}
-      </button>`;
-    })
-    .join('');
-}
-
-function renderNotes() {
-  const tree = state.notesTree?.tree || [];
-  const sel = state.noteDetail;
-  const side = tree.length
-    ? `<div class="note-tree">${noteTreeHtml(tree)}</div>`
-    : '<div class="rv-hint">还没扫到笔记。确认 config.json 里的 noteDirs。</div>';
-
-  const detail = sel
-    ? `<article class="note-detail">
-        <div class="note-head">
-          <h2>${esc(sel.rel.split('/').pop().replace(/\.md$/, ''))}</h2>
-          <div class="note-meta">${esc(sel.rel)}　·　${(sel.size / 1024).toFixed(1)} KB</div>
-        </div>
-        <div class="note-body">${mdToHtml(sel.content)}</div>
-      </article>`
-    : `<div class="panel"><div class="panel-body empty-row">左边选一篇笔记</div></div>`;
-
-  return `<div class="library">
-    <aside class="sidebar notes-side">${side}</aside>
-    <div>${detail}</div>
-  </div>`;
-}
-
 /* ---------------- 复盘 ---------------- */
 async function loadJournal(date) {
   try {
@@ -2074,6 +2019,13 @@ function renderJournal() {
       <div class="filter-group"><h4>历史复盘</h4>${history}</div>
     </aside>
     <div class="journal">
+      <div class="journal-nav">
+        <button class="btn-ghost small" data-journal-move="-1">‹ 前一天</button>
+        <input type="date" id="journalDate" class="date-input" value="${esc(j.date)}" />
+        <button class="btn-ghost small" data-journal-move="1">后一天 ›</button>
+        <button class="btn-ghost small" data-journal-move="0">回到今天</button>
+        <span class="rv-hint">${j.exists ? '已有这篇' : '这篇还没写过'}</span>
+      </div>
       <div class="plan-head">
         <h2>${esc(j.date)} 复盘</h2>
         <div class="plan-meta">
@@ -2089,6 +2041,14 @@ function renderJournal() {
       </div>
     </div>
   </div>`;
+}
+
+/** 日期加减天数；n=0 表示回到今天 */
+function shiftDate(date, n) {
+  const base = n === 0 || !date ? new Date() : new Date(`${date}T00:00:00`);
+  if (n !== 0) base.setDate(base.getDate() + n);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${base.getFullYear()}-${p(base.getMonth() + 1)}-${p(base.getDate())}`;
 }
 
 async function saveJournal() {
@@ -2140,7 +2100,6 @@ function render() {
   let body = '';
   if (state.module === 'today') body = renderToday();
   else if (state.module === 'plan') body = renderPlan();
-  else if (state.module === 'notes') body = renderNotes();
   else if (state.module === 'journal') body = renderJournal();
   else {
     if (!state.data || !state.stats) {
@@ -2198,8 +2157,10 @@ function buildHash({ module, sub, scope, solveId, rel }) {
       if (scope?.subject) seg.push(scope.subject);
       if (scope?.chapter) seg.push(scope.chapter);
     }
-  } else if ((module === 'notes' || module === 'plan') && rel) {
+  } else if (module === 'plan' && rel) {
     seg.push(...String(rel).split('/'));
+  } else if (module === 'journal' && rel) {
+    seg.push(rel);
   }
   return '#' + seg.filter(Boolean).map(encodeURIComponent).join('/');
 }
@@ -2247,13 +2208,6 @@ function applyHash() {
     render();
     return;
   }
-  if (module === 'notes') {
-    const rel = parts.slice(1).join('/') || null;
-    state.noteRel = rel;
-    loadNotes().then(() => (rel ? loadNoteDetail(rel) : null)).then(() => render());
-    render();
-    return;
-  }
   if (module === 'journal') {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(parts[1] || '') ? parts[1] : null;
     state.journalDate = date;
@@ -2297,8 +2251,10 @@ function go(patch = {}) {
     return;
   }
 
-  const rel = patch.rel !== undefined ? patch.rel : module === 'journal' ? state.journalDate : state.planRel ?? state.noteRel;
-  const hash = buildHash({ module, rel: module === 'plan' || module === 'notes' ? rel : patch.rel });
+  let rel = patch.rel;
+  if (module === 'journal') rel = patch.date !== undefined ? patch.date : state.journalDate;
+  else if (module === 'plan') rel = patch.rel !== undefined ? patch.rel : state.planRel;
+  const hash = buildHash({ module, rel });
   if (location.hash !== hash) location.hash = hash;
   else applyHash();
 }
@@ -2382,6 +2338,7 @@ function bindEvents() {
 
   // 图片选择与拖拽
   $('#main').addEventListener('change', (e) => {
+    if (e.target.id === 'journalDate') return go({ module: 'journal', date: e.target.value });
     if (e.target.id === 'fileInput' && e.target.files?.length) {
       uploadFiles(e.target.files);
       e.target.value = '';
@@ -2545,12 +2502,11 @@ function bindEvents() {
     }
     const planBtn = e.target.closest('[data-plan]');
     if (planBtn) return go({ module: 'plan', rel: planBtn.dataset.plan });
-    const noteBtn = e.target.closest('[data-note]');
-    if (noteBtn) return go({ module: 'notes', rel: noteBtn.dataset.note });
     const jBtn = e.target.closest('[data-journal]');
-    if (jBtn && jBtn.dataset.journal) return go({ module: 'journal', rel: jBtn.dataset.journal });
+    if (jBtn && jBtn.dataset.journal) return go({ module: 'journal', date: jBtn.dataset.journal });
     if (e.target.closest('[data-journal-save]')) return saveJournal();
-    if (e.target.closest('[data-journal-today]')) return go({ module: 'journal' });
+    const mv = e.target.closest('[data-journal-move]');
+    if (mv) return go({ module: 'journal', date: shiftDate(state.journal?.date, Number(mv.dataset.journalMove)) });
 
     const open = e.target.closest('[data-open]');
     if (open) return openDrawer(open.dataset.open);

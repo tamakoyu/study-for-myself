@@ -18,6 +18,9 @@ import { readText, writeText, backupFile } from './vault.mjs';
 const CN_NUM = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
 export const cnWeek = (n) => (n <= 10 ? `第${CN_NUM[n]}周` : `第${n}周`);
 
+/** 只有这两节里的是「真任务」；错题四步法之类是方法说明，不该算进完成率 */
+const zoneOf = (h2) => (/本周任务|遗忘曲线复习/.test(h2 || '') ? 'task' : 'other');
+
 /** - [ ] 内容 / - [x] 内容 ✅ 2026-09-09 */
 const TASK_RE = /^(\s*)- \[([ xX])\]\s+(.*)$/;
 const DONE_DATE_RE = /\s*✅\s*(\d{4}-\d{2}-\d{2})\s*$/;
@@ -67,6 +70,7 @@ export function parsePlan(abs, vaultDir) {
   let h1 = null;
   const groups = [];
   let curGroup = null;
+  let curH2 = '';
   const headings = [];
 
   lines.forEach((line, i) => {
@@ -77,13 +81,14 @@ export function parsePlan(abs, vaultDir) {
     }
     const h2 = line.match(/^##\s+(.*)$/);
     if (h2) {
-      headings.push(h2[1].trim());
+      curH2 = h2[1].trim();
+      headings.push(curH2);
       curGroup = null;
       return;
     }
     const h3 = line.match(/^###\s+(.*)$/);
     if (h3) {
-      curGroup = { name: h3[1].trim(), tasks: [] };
+      curGroup = { name: h3[1].trim(), zone: zoneOf(curH2), tasks: [] };
       groups.push(curGroup);
       return;
     }
@@ -99,6 +104,8 @@ export function parsePlan(abs, vaultDir) {
     if (dateM && month) taskDate = `${month}-${pad2(Number(dateM[2]))}`;
     const task = {
       line: i,
+      // 🔁 开头的任务表示「每天都要做」，程序会每天都列出来，不用在文件里复制 7 遍
+      daily: /^🔁\s*/.test(body),
       text: body,
       done: t[2].toLowerCase() === 'x',
       doneDate: doneM ? doneM[1] : null,
@@ -107,9 +114,12 @@ export function parsePlan(abs, vaultDir) {
     };
     if (curGroup) curGroup.tasks.push(task);
     else {
-      if (!groups.length || groups[groups.length - 1].name !== '_未分组') {
-        curGroup = { name: '_未分组', tasks: [] };
+      const last = groups[groups.length - 1];
+      if (!last || last.name !== '_未分组' || last.zone !== zoneOf(curH2)) {
+        curGroup = { name: zoneOf(curH2) === 'task' ? '本周任务' : '_未分组', zone: zoneOf(curH2), tasks: [] };
         groups.push(curGroup);
+      } else {
+        curGroup = last;
       }
       curGroup.tasks.push(task);
       curGroup = null;
@@ -117,7 +127,8 @@ export function parsePlan(abs, vaultDir) {
   });
 
   const head = parsePlanHeading(h1, fallbackMonth);
-  const all = groups.flatMap((g) => g.tasks);
+  const taskGroups = groups.filter((g) => g.zone === 'task');
+  const all = taskGroups.flatMap((g) => g.tasks);
   const doneCount = all.filter((t) => t.done).length;
 
   return {
@@ -132,6 +143,7 @@ export function parsePlan(abs, vaultDir) {
     h1,
     headings,
     groups,
+    taskGroups,
     total: all.length,
     done: doneCount,
     rate: all.length ? Math.round((doneCount / all.length) * 100) : 0,

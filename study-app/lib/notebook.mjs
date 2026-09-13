@@ -23,7 +23,6 @@ export function loadConfig() {
     notebookDir: '错题本',
     planDir: '考研',
     reviewDir: '复盘',
-    noteDirs: ['高等数学', '高数上知识前探', '数据结构', '费曼自测清单'],
     examDate: '2027-12-18',
     backupDir: 'backups',
     exportDir: 'data',
@@ -52,7 +51,6 @@ export function loadConfig() {
   cfg.backupDir = appRel(cfg.backupDir);
   cfg.exportDir = appRel(cfg.exportDir);
   cfg.uploadDir = appRel(cfg.uploadDir);
-  cfg.noteDirs = (cfg.noteDirs || []).map(String);
 
   // 环境变量优先，方便指向另一份仓库（做测试用）
   if (process.env.NOTEBOOK_DIR) cfg.notebookDir = path.resolve(process.env.NOTEBOOK_DIR);

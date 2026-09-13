@@ -23,7 +23,6 @@ import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.m
 import { chapterOptions } from './lib/create.mjs';
 import { scanPlans, toggleTask } from './lib/plans.mjs';
 import { readReview, writeReview, listReviews } from './lib/reviews.mjs';
-import { scanNotes, readNote } from './lib/notes.mjs';
 import { buildToday, plansCached } from './lib/today.mjs';
 import { RESULTS } from './lib/parse.mjs';
 
@@ -288,23 +287,6 @@ async function main() {
         const out = toggleTask(cfg.vaultDir, cfg.backupDir, body.rel, body);
         plansCached(cfg, true);
         sendJson(res, 200, { ok: true, ...out });
-        return;
-      }
-
-      if (p === '/api/notes' && req.method === 'GET') {
-        sendJson(res, 200, scanNotes(cfg.vaultDir, cfg.noteDirs));
-        return;
-      }
-
-      if (p === '/api/note' && req.method === 'GET') {
-        const rel = String(url.searchParams.get('rel') || '');
-        const abs = path.resolve(cfg.vaultDir, rel);
-        const okRoot = cfg.noteDirs.some((d) => abs.startsWith(path.join(cfg.vaultDir, d) + path.sep));
-        if (!okRoot) {
-          sendJson(res, 403, { error: '只能读笔记目录里的文件' });
-          return;
-        }
-        sendJson(res, 200, readNote(cfg.vaultDir, rel));
         return;
       }
 
