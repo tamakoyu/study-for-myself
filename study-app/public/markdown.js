@@ -139,14 +139,30 @@ function blocks(lines) {
       continue;
     }
 
-    // 无序列表
+    // 无序列表（其中 - [ ] / - [x] 渲染成可点击的复选框）
     if (/^\s*[-*+]\s+/.test(line)) {
       const items = [];
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        items.push(lines[i].replace(/^\s*[-*+]\s+/, ''));
+        items.push(lines[i]);
         i++;
       }
-      out.push(`<ul class="md-list">${items.map((t) => `<li>${inline(t)}</li>`).join('')}</ul>`);
+      out.push(
+        `<ul class="md-list">${items
+          .map((raw) => {
+            const t = raw.replace(/^\s*[-*+]\s+/, '');
+            const task = t.match(/^\[([ xX])\]\s*(.*)$/);
+            if (!task) return `<li>${inline(t)}</li>`;
+            const done = task[1].toLowerCase() === 'x';
+            const text = task[2].replace(/\s*✅\s*\d{4}-\d{2}-\d{2}\s*$/, '').trim();
+            return `<li class="md-task${done ? ' is-done' : ''}">
+              <input type="checkbox" data-task="1" data-text="${escapeHtml(text)}"${
+                done ? ' checked' : ''
+              } />
+              <span>${inline(text)}</span>
+            </li>`;
+          })
+          .join('')}</ul>`
+      );
       continue;
     }
 

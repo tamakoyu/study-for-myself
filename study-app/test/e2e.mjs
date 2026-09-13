@@ -75,7 +75,15 @@ class Session {
       if (await this.js(`return !!document.querySelector(${JSON.stringify(sel)});`)) return true;
       await sleep(150);
     }
-    throw new Error(`等不到元素：${sel}`);
+    // 等不到就把现场打出来，方便定位
+    const diag = await this.js(
+      `return JSON.stringify({
+         url: location.href,
+         head: (document.getElementById('main') || {}).innerHTML ? document.getElementById('main').innerHTML.slice(0, 300) : '(空)',
+         toasts: [...document.querySelectorAll('.toast')].map(t=>t.textContent)
+       });`
+    );
+    throw new Error(`等不到元素：${sel}\n  现场：${diag}`);
   }
   async shot(name) {
     const { data } = await this.send('Page.captureScreenshot', { format: 'png' });
@@ -109,8 +117,100 @@ await s.send('Page.enable');
 
 console.log(`\n=== 错题本 · 浏览器端到端测试（${APP}）===\n`);
 
-/* ---------- 1. 总览首页：数学 / 408 两张大页 ---------- */
-await s.js(`location.hash=''; location.reload();`);
+/* ---------- 0. 今日首页 ---------- */
+await s.js(`location.replace(${JSON.stringify(APP + '/#today')});`);
+await sleep(2000);
+await s.waitFor('.countdown-card');
+const cdDays = await s.js(`return document.querySelector('.cd-days')?.textContent.trim() || '';`);
+const cdExpect = Math.round((new Date('2027-12-18T00:00:00') - new Date(new Date().toDateString())) / 86400000);
+check('今日：考研倒计时', cdDays.startsWith(String(cdExpect)), `显示 ${cdDays}，应为 ${cdExpect} 天`);
+const todayTaskCount = await s.js(`return document.querySelectorAll('.task-list input[data-task]').length;`);
+check('今日：列出今日与本周待办', todayTaskCount >= 1, `${todayTaskCount} 条`);
+const dayCells = await s.js(`return document.querySelectorAll('.day-cell').length;`);
+check('今日：本周 7 天进度条', dayCells === 7, `${dayCells} 格`);
+const todayStats = await s.js(`return [...document.querySelectorAll('.stat-card .stat-label')].map(x=>x.textContent.trim()).join(' | ');`);
+check(
+  '今日：四张统计卡（今日完成 / 本周 / 错题 / 连续打卡）',
+  todayStats.includes('今日完成') && todayStats.includes('本周完成率') && todayStats.includes('错题待复习') && todayStats.includes('连续打卡'),
+  todayStats
+);
+await s.shot('15-today');
+
+// 勾一条今日任务 → 应写回 Obsidian
+const planPath = '考研/2026-09/2026-09-第2周-周计划.md';
+const beforePlan = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
+const undoneTask = beforePlan.groups.flatMap((g) => g.tasks).find((x) => !x.done);
+await s.js(`document.querySelectorAll('.task-list input[data-task]')[0].click();`);
+await sleep(1600);
+const afterPlan = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
+const nowDone = afterPlan.groups.flatMap((g) => g.tasks).filter((x) => x.done).length;
+check('今日：勾选任务写回 Obsidian', nowDone === beforePlan.done + 1, `${beforePlan.done} → ${nowDone} 已完成`);
+check('今日：写回带上了完成日期', afterPlan.groups.flatMap((g) => g.tasks).some((x) => x.doneDate === new Date().toISOString().slice(0, 10)));
+// 再点一次取消
+await s.js(`document.querySelectorAll('.task-list input[data-task]')[0].click();`);
+await sleep(1600);
+const reverted = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
+check('今日：再点一次可取消勾选', reverted.done === beforePlan.done, `${reverted.done} 项已完成`);
+
+/* ---------- 0.5 计划页 ---------- */
+await s.js(`document.querySelector('.tab[data-module="plan"]').click();`);
+await sleep(1800);
+await s.waitFor('.plan-link');
+const planLinks = await s.js(`return document.querySelectorAll('.plan-link').length;`);
+check('计划：列出周/月计划', planLinks >= 10, `${planLinks} 项`);
+const weekIdx = await s.js(
+  `return [...document.querySelectorAll('.plan-link')].findIndex(x=>!x.textContent.includes('月计划'));`
+);
+await s.js(`document.querySelectorAll('.plan-link')[${weekIdx}].click();`);
+await sleep(1500);
+const planGroups = await s.js(`return document.querySelectorAll('.plan-group').length;`);
+check('计划：详情按科目分组渲染', planGroups >= 3, `${planGroups} 组`);
+const planBoxes = await s.js(`return document.querySelectorAll('.plan-body input[data-task]').length;`);
+check('计划：渲染出可勾选的任务', planBoxes >= 5, `${planBoxes} 个复选框`);
+await s.shot('16-plan');
+
+/* ---------- 0.6 笔记页 ---------- */
+await s.js(`document.querySelector('.tab[data-module="notes"]').click();`);
+await sleep(1800);
+await s.waitFor('.nt-file');
+const noteFiles = await s.js(`return document.querySelectorAll('.nt-file').length;`);
+check('笔记：目录树列出笔记', noteFiles >= 10, `${noteFiles} 篇`);
+await s.js(`document.querySelectorAll('.nt-file')[0].click();`);
+await sleep(1500);
+const noteBody = await s.js(`return (document.querySelector('.note-body')?.textContent || '').length;`);
+check('笔记：渲染正文', noteBody > 100, `${noteBody} 字`);
+check('笔记：公式用 KaTeX 渲染', (await s.js(`return document.querySelectorAll('.note-body .katex').length;`)) > 0);
+await s.shot('17-notes');
+
+/* ---------- 0.7 复盘页 ---------- */
+await s.js(`document.querySelector('.tab[data-module="journal"]').click();`);
+await sleep(1800);
+await s.waitFor('.journal-edit');
+const jPath = await s.js(`return document.querySelector('.plan-meta code')?.textContent.trim() || '';`);
+check('复盘：路径按日期自动归档', /^复盘\/26\.9\/第[一二三四五]周\/9\.\d+复盘\.md$/.test(jPath), jPath);
+await s.js(
+  `var ta=document.getElementById('journalText');
+   ta.value='## E2E 测试' + String.fromCharCode(10) + String.fromCharCode(10) + '今天把 study 首页做完了。';
+   ta.dispatchEvent(new Event('input',{bubbles:true}));`
+);
+await s.js(`document.querySelector('[data-journal-save]').click();`);
+await sleep(1800);
+const jRead = await (await fetch(`${APP}/api/review?date=${new Date().toISOString().slice(0,10)}`)).json();
+check('复盘：保存后文件已生成', jRead.exists && jRead.content.includes('E2E 测试'), jRead.rel);
+await s.shot('18-journal');
+
+/* ---------- 1. 错题模块：先造一道「遗忘曲线到期」的题 ---------- */
+// 用 3 天前做「完美」的方式，让间隔 1 天的排期立刻到期（不依赖外部预置数据）
+const seedList = await (await fetch(`${APP}/api/questions`)).json();
+const seedTarget = seedList.problems.find((x) => x.chapter === '函数');
+const back3 = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+await api2('/api/checkin', {
+  method: 'POST',
+  body: JSON.stringify({ id: seedTarget.id, result: '完美', date: back3, seconds: 180 }),
+});
+await sleep(600);
+
+await s.js(`document.querySelector('.tab[data-module="mistakes"]').click();`);
 await sleep(1600);
 await s.waitFor('.category-grid');
 const cats = await s.js(
@@ -185,7 +285,7 @@ const btnPath = await s.js(`return document.querySelector('#scopeText').textCont
 check('范围选择器：按钮更新为三级路径', btnPath === '数学 › 高数 › 极限', btnPath);
 
 /* ---------- 5. 题库跟随范围 ---------- */
-await s.js(`document.querySelector('.tab[data-view="library"]').click();`);
+await s.js(`document.querySelector('.subtab[data-sub="library"]').click();`);
 await sleep(800);
 await s.waitFor('.problem-grid');
 const libCards = await s.js(`return document.querySelectorAll('.problem-card').length;`);
@@ -231,7 +331,7 @@ const solved = afterReason.problems.find((x) => x.num === solveWho);
 check('做题模式：错因写进打卡记录', !!solved && solved.checkins.some((c) => c.reason === '计算失误'), solved ? solved.num : 'NO');
 check('做题模式：用时也记下了', !!solved && solved.checkins.some((c) => c.seconds > 0));
 
-await s.js(`location.hash='#library';`);
+await s.js(`location.hash='#mistakes/library';`);
 await sleep(900);
 await s.click('.problem-card');
 await s.waitFor('#drawerPanel [data-reason-select]');
@@ -267,7 +367,7 @@ check('详情：回车能新增考点标签', pts2.includes('E2E测试考点'), 
 await s.click('[data-close-drawer]');
 
 /* ---------- 6. 复习：换范围 + 混刷 ---------- */
-await s.js(`document.querySelector('.tab[data-view="review"]').click();`);
+await s.js(`document.querySelector('.subtab[data-sub="drill"]').click();`);
 await s.waitFor('.rv-setup');
 const quickChips = await s.js(
   `return [...document.querySelectorAll('[data-scope="reset"],[data-scope2="subject"]')].map(x=>x.textContent.trim());`
@@ -352,8 +452,9 @@ check(
   `完成 ${detail.totals.done} 题`
 );
 
-await s.js(`document.querySelector('.tab[data-view="dashboard"]').click();`);
-await sleep(1200);
+// 回到全库范围的总览，才能看到「函数」那道到期题
+await s.js(`location.hash='#mistakes/dashboard';`);
+await sleep(1800);
 const duePanel = await s.js(
   `return [...document.querySelectorAll('.panel-head h3')].map(x=>x.textContent.trim()).join(' | ');`
 );
@@ -367,7 +468,7 @@ const timed = q1.problems.find((p) => p.checkins.some((c) => c.done && c.seconds
 check('用时：打卡记录带上了秒数', !!timed, timed ? `${timed.num} → ${timed.checkins.find((c) => c.seconds > 0).seconds}s` : '没找到');
 
 /* ---------- 7. 增题页 ---------- */
-await s.js(`document.querySelector('.tab[data-view="add"]').click();`);
+await s.js(`document.querySelector('.subtab[data-sub="add"]').click();`);
 await s.waitFor('#addStem');
 await s.js(
   `var t=document.getElementById('addStem');
@@ -401,8 +502,10 @@ await s.js(
 const dataUrl = await s.js(`return window.__png;`);
 const up = await api2('/api/upload', { method: 'POST', body: JSON.stringify({ name: 'e2e题目.png', dataUrl }) });
 check('图片：上传成功', !!up.name, up.name);
-await s.js(`location.hash='#add';`);
-await sleep(1400);
+await s.js(`document.querySelector('.subtab[data-sub="dashboard"]').click();`);
+await sleep(600);
+await s.js(`document.querySelector('.subtab[data-sub="add"]').click();`);
+await sleep(1800);
 const thumbs = await s.js(`return document.querySelectorAll('.upload-item img').length;`);
 check('图片：缩略图显示在增题页', thumbs >= 1, `${thumbs} 张`);
 check('图片：「生成提示词」按钮已可用', (await s.js(`return !document.querySelector('[data-add="prompt-images"]').disabled;`)) === true);
@@ -428,8 +531,13 @@ check('增题：408 / 操作系统 目录已自动创建', !!os8 && os8.total ==
 const newFile = afterDoc.problems.find((p) => p.category === '408');
 check('增题：新题可被解析并带完整骨架', !!newFile && newFile.warnings.length === 0, newFile ? newFile.relPath : 'NO');
 
+/* ---------- 7.5 还原被改动的计划文件 ---------- */
+const finalPlan = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
+const extra = finalPlan.groups.flatMap((g) => g.tasks).filter((x) => x.done && !x.doneDate);
+check('计划：测试期间没有留下脏数据', finalPlan.done === beforePlan.done, `完成数 ${finalPlan.done}（原 ${beforePlan.done}）`);
+
 /* ---------- 8. 主题 ---------- */
-await s.js(`document.documentElement.dataset.theme='light'; location.hash='';`);
+await s.js(`document.documentElement.dataset.theme='light'; location.hash='#today';`);
 await sleep(800);
 await s.shot('10-light');
 check('浅色主题', (await s.js(`return document.documentElement.dataset.theme;`)) === 'light');

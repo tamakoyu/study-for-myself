@@ -1,13 +1,13 @@
-# ── 只提交「错题本程序」，错题笔记留在本地 Obsidian，不进仓库 ──
+# ── 只提交「study 程序」，笔记 / 计划 / 复盘全部留在本地 Obsidian ──
 /*
 !/.gitignore
 !/README.md
-!/错题本-app/
+!/study-app/
 
 # 机器产物，永远不入库
-错题本-app/backups/
-错题本-app/data/
-错题本-app/uploads/
-错题本-app/node_modules/
+study-app/backups/
+study-app/data/
+study-app/uploads/
+study-app/node_modules/
 **/.DS_Store
 **/__pycache__/

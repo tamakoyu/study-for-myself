@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>错题本</title>
+    <title>study · 考研学习台</title>
     <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
     <link rel="stylesheet" href="/style.css" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📕</text></svg>" />
@@ -12,7 +12,7 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">📕</span>
-        <span class="brand-text">错题本</span>
+        <span class="brand-text">study</span>
       </div>
 
       <div class="scope-picker" id="scopePicker">
@@ -26,10 +26,11 @@
       </div>
 
       <nav class="tabs" id="tabs">
-        <button class="tab is-active" data-view="dashboard">总览</button>
-        <button class="tab" data-view="library">题库</button>
-        <button class="tab" data-view="review">复习</button>
-        <button class="tab" data-view="add">增题</button>
+        <button class="tab is-active" data-module="today">今日</button>
+        <button class="tab" data-module="mistakes">错题</button>
+        <button class="tab" data-module="plan">计划</button>
+        <button class="tab" data-module="notes">笔记</button>
+        <button class="tab" data-module="journal">复盘</button>
       </nav>
 
       <div class="topbar-tools">
@@ -42,6 +43,13 @@
         <button class="icon-btn" id="btnTheme" title="切换深浅色">◐</button>
       </div>
     </header>
+
+    <nav class="subnav" id="mistakeSubnav" hidden>
+      <button class="subtab is-active" data-sub="dashboard">总览</button>
+      <button class="subtab" data-sub="library">题库</button>
+      <button class="subtab" data-sub="drill">复习</button>
+      <button class="subtab" data-sub="add">增题</button>
+    </nav>
 
     <main id="main">
       <div class="loading"><div class="spinner"></div><p>正在读取错题本…</p></div>

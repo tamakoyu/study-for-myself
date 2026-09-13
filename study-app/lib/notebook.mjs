@@ -19,38 +19,50 @@ export const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 export function loadConfig() {
   const cfgPath = path.join(APP_DIR, 'config.json');
   const defaults = {
-    notebookDir: path.resolve(APP_DIR, '..', '错题本'),
-    backupDir: path.join(APP_DIR, 'backups'),
-    exportDir: path.join(APP_DIR, 'data'),
-    uploadDir: path.join(APP_DIR, 'uploads'),
+    vaultDir: path.resolve(APP_DIR, '..'),
+    notebookDir: '错题本',
+    planDir: '考研',
+    reviewDir: '复盘',
+    noteDirs: ['高等数学', '高数上知识前探', '数据结构', '费曼自测清单'],
+    examDate: '2027-12-18',
+    backupDir: 'backups',
+    exportDir: 'data',
+    uploadDir: 'uploads',
     port: 4173,
     host: '127.0.0.1',
   };
-  // 兼容 JSON 里的 // 注释
-  const readJson = (p) => {
-    const raw = fs.readFileSync(p, 'utf8').replace(/^\s*\/\/.*$/gm, '');
-    return JSON.parse(raw);
-  };
+  const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\s*\/\/.*$/gm, ''));
+  let user = {};
   if (fs.existsSync(cfgPath)) {
     try {
-      const user = readJson(cfgPath);
-      const cfg = { ...defaults, ...user };
-      cfg.notebookDir = path.resolve(APP_DIR, cfg.notebookDir);
-      cfg.backupDir = path.resolve(APP_DIR, cfg.backupDir);
-      cfg.exportDir = path.resolve(APP_DIR, cfg.exportDir);
-      cfg.uploadDir = path.resolve(APP_DIR, cfg.uploadDir || 'uploads');
-      // 环境变量优先，方便指向另一份错题本（例如做测试）
-      if (process.env.NOTEBOOK_DIR) cfg.notebookDir = path.resolve(process.env.NOTEBOOK_DIR);
-      if (process.env.NOTEBOOK_PORT) cfg.port = Number(process.env.NOTEBOOK_PORT);
-      return cfg;
+      user = readJson(cfgPath);
     } catch (err) {
       console.warn(`[config] config.json 解析失败，改用默认配置：${err.message}`);
     }
   }
-  if (process.env.NOTEBOOK_DIR) {
-    return { ...defaults, notebookDir: path.resolve(process.env.NOTEBOOK_DIR) };
+  const cfg = { ...defaults, ...user };
+
+  const appRel = (v) => path.resolve(APP_DIR, v);
+  const vaultRel = (v) => path.resolve(cfg.vaultDir, v);
+
+  cfg.vaultDir = appRel(cfg.vaultDir);
+  cfg.notebookDir = vaultRel(cfg.notebookDir);
+  cfg.planDir = vaultRel(cfg.planDir);
+  cfg.reviewDir = vaultRel(cfg.reviewDir);
+  cfg.backupDir = appRel(cfg.backupDir);
+  cfg.exportDir = appRel(cfg.exportDir);
+  cfg.uploadDir = appRel(cfg.uploadDir);
+  cfg.noteDirs = (cfg.noteDirs || []).map(String);
+
+  // 环境变量优先，方便指向另一份仓库（做测试用）
+  if (process.env.NOTEBOOK_DIR) cfg.notebookDir = path.resolve(process.env.NOTEBOOK_DIR);
+  if (process.env.VAULT_DIR) {
+    cfg.vaultDir = path.resolve(process.env.VAULT_DIR);
+    cfg.planDir = path.join(cfg.vaultDir, String(cfg.planDirRel || '考研'));
+    cfg.reviewDir = path.join(cfg.vaultDir, String(cfg.reviewDir || '复盘'));
   }
-  return defaults;
+  if (process.env.NOTEBOOK_PORT) cfg.port = Number(process.env.NOTEBOOK_PORT);
+  return cfg;
 }
 
 let cache = { at: 0, data: null };

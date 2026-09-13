@@ -21,6 +21,10 @@ import {
 } from './lib/notebook.mjs';
 import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.mjs';
 import { chapterOptions } from './lib/create.mjs';
+import { scanPlans, toggleTask } from './lib/plans.mjs';
+import { readReview, writeReview, listReviews } from './lib/reviews.mjs';
+import { scanNotes, readNote } from './lib/notes.mjs';
+import { buildToday, plansCached } from './lib/today.mjs';
 import { RESULTS } from './lib/parse.mjs';
 
 const PUBLIC_DIR = path.join(APP_DIR, 'public');
@@ -227,6 +231,107 @@ async function main() {
       if (p === '/api/prompt-images' && req.method === 'POST') {
         const body = await readBody(req);
         sendJson(res, 200, promptForImages(cfg, body.names, body));
+        return;
+      }
+
+      /* ---- study：今日 / 计划 / 笔记 / 复盘 ---- */
+      if (p === '/api/today' && req.method === 'GET') {
+        sendJson(res, 200, buildToday(cfg, snapshot(cfg).stats));
+        return;
+      }
+
+      if (p === '/api/plans' && req.method === 'GET') {
+        const plans = plansCached(cfg, url.searchParams.get('fresh') === '1');
+        sendJson(res, 200, {
+          count: plans.length,
+          plans: plans.map((x) => ({
+            rel: x.rel,
+            kind: x.kind,
+            month: x.month,
+            week: x.week,
+            range: x.range,
+            title: x.title,
+            h1: x.h1,
+            total: x.total,
+            done: x.done,
+            rate: x.rate,
+            mtime: x.mtime,
+          })),
+        });
+        return;
+      }
+
+      if (p === '/api/plan' && req.method === 'GET') {
+        const rel = url.searchParams.get('rel') || '';
+        const abs = path.resolve(cfg.vaultDir, rel);
+        if (!abs.startsWith(cfg.planDir + path.sep)) {
+          sendJson(res, 403, { error: '只能读计划目录里的文件' });
+          return;
+        }
+        const plans = plansCached(cfg);
+        const found = plans.find((x) => x.rel === rel);
+        if (!found) {
+          sendJson(res, 404, { error: '找不到这份计划' });
+          return;
+        }
+        sendJson(res, 200, { ...found, content: fs.readFileSync(abs, 'utf8') });
+        return;
+      }
+
+      if (p === '/api/task' && req.method === 'POST') {
+        const body = await readBody(req);
+        const abs = path.resolve(cfg.vaultDir, String(body.rel || ''));
+        if (!abs.startsWith(cfg.planDir + path.sep)) {
+          sendJson(res, 403, { error: '只能改计划目录里的文件' });
+          return;
+        }
+        const out = toggleTask(cfg.vaultDir, cfg.backupDir, body.rel, body);
+        plansCached(cfg, true);
+        sendJson(res, 200, { ok: true, ...out });
+        return;
+      }
+
+      if (p === '/api/notes' && req.method === 'GET') {
+        sendJson(res, 200, scanNotes(cfg.vaultDir, cfg.noteDirs));
+        return;
+      }
+
+      if (p === '/api/note' && req.method === 'GET') {
+        const rel = String(url.searchParams.get('rel') || '');
+        const abs = path.resolve(cfg.vaultDir, rel);
+        const okRoot = cfg.noteDirs.some((d) => abs.startsWith(path.join(cfg.vaultDir, d) + path.sep));
+        if (!okRoot) {
+          sendJson(res, 403, { error: '只能读笔记目录里的文件' });
+          return;
+        }
+        sendJson(res, 200, readNote(cfg.vaultDir, rel));
+        return;
+      }
+
+      if (p === '/api/reviews' && req.method === 'GET') {
+        sendJson(res, 200, { reviews: listReviews(cfg.reviewDir, cfg.vaultDir), today: new Date().toISOString().slice(0, 10) });
+        return;
+      }
+
+      if (p === '/api/review' && req.method === 'GET') {
+        const date = String(url.searchParams.get('date') || '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          sendJson(res, 400, { error: '日期格式应为 YYYY-MM-DD' });
+          return;
+        }
+        sendJson(res, 200, readReview(cfg.vaultDir, date, plansCached(cfg)));
+        return;
+      }
+
+      if (p === '/api/review' && req.method === 'POST') {
+        const body = await readBody(req, 2 * 1024 * 1024);
+        const date = String(body.date || '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          sendJson(res, 400, { error: '日期格式应为 YYYY-MM-DD' });
+          return;
+        }
+        const out = writeReview(cfg.vaultDir, cfg.backupDir, date, String(body.content ?? ''), plansCached(cfg));
+        sendJson(res, 200, { ok: true, ...out });
         return;
       }
 

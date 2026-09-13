@@ -4,7 +4,9 @@ import { mdToHtml, plainText, initMath } from './markdown.js';
    状态
    ============================================================ */
 const state = {
-  view: 'dashboard', // dashboard | library | review | add
+  module: 'today',
+  sub: 'dashboard',
+  view: 'dashboard',
   scope: { category: null, subject: null, chapter: null },
   data: null, // 全量：problems / tree / taxonomy / options
   stats: null, // 当前 scope 的统计
@@ -29,9 +31,19 @@ const state = {
     pendingResult: null,
   },
   add: { raw: '', mode: 'rule', items: null, busy: false, uploads: [] },
+  // study 各模块的数据
+  today: null,
+  plans: null,
+  planDetail: null,
+  notesTree: null,
+  noteDetail: null,
+  journals: null,
+  journal: null,
 };
 
-const VIEWS = ['dashboard', 'library', 'review', 'add', 'solve'];
+const MODULES = ['today', 'mistakes', 'plan', 'notes', 'journal'];
+const SUBVIEWS = ['dashboard', 'library', 'drill', 'add', 'solve'];
+const MODULE_LABEL = { today: '今日', mistakes: '错题', plan: '计划', notes: '笔记', journal: '复盘' };
 
 /** 错因词表（与后端 taxonomy.mjs 保持一致） */
 const REASONS = ['概念不清', '方法不会', '思路方向错', '计算失误', '审题错误', '公式记错', '粗心大意', '时间不够'];
@@ -1310,7 +1322,7 @@ function closeSolve() {
 
 function startSolveTimer() {
   stopSolveTimer();
-  if (state.view !== 'solve' || !state.solve.id) return;
+  if (state.sub !== 'solve' || !state.solve.id) return;
   state.solve.timerId = setInterval(() => {
     const el = document.getElementById('solveTimer');
     if (!el) return stopSolveTimer();
@@ -1712,39 +1724,484 @@ async function addPrompt() {
 /* ============================================================
    渲染 & 路由
    ============================================================ */
-function render() {
-  if (!state.data || !state.stats) return;
-  const main = $('#main');
 
-  let body;
-  if (state.view === 'dashboard') body = renderDashboard();
-  else if (state.view === 'library') body = renderLibrary();
-  else if (state.view === 'review') body = renderReview();
-  else if (state.view === 'solve') body = renderSolve();
-  else body = renderAdd();
+/* ============================================================
+   study：今日 / 计划 / 笔记 / 复盘
+   ============================================================ */
 
-  main.innerHTML = body;
+/** 一条可勾选的任务（计划页与今日页共用） */
+function taskLi(task, { rel = '', occ = 0 } = {}) {
+  return `<li class="md-task${task.done ? ' is-done' : ''}">
+    <input type="checkbox" data-task="1" data-rel="${esc(rel)}" data-text="${esc(task.text)}" data-occ="${occ}"${task.done ? ' checked' : ''} />
+    <span>${esc(task.text)}</span>
+    ${task.done && task.doneDate ? `<em class="task-date">✅ ${esc(task.doneDate)}</em>` : ''}
+  </li>`;
+}
 
-  renderScopeButton();
-  // 顶栏范围选择器只在总览/题库/复习有用；做题时全屏专心做
-  $('#scopePicker').hidden = state.view === 'add' || state.view === 'solve';
-  document.body.classList.toggle('is-solving', state.view === 'solve');
-  // 面板开着的时候（比如打卡后数据刷新）跟着更新
-  if (state.pickerOpen) $('#scopeMenu').innerHTML = renderScopeMenu();
+/** 同一份计划里可能有重名任务，按出现顺序编号 */
+function withOcc(list) {
+  const seen = new Map();
+  return list.map((t) => {
+    const n = seen.get(t.text) || 0;
+    seen.set(t.text, n + 1);
+    return { ...t, occ: n };
+  });
+}
 
-  for (const btn of document.querySelectorAll('.tab')) {
-    btn.classList.toggle('is-active', btn.dataset.view === state.view);
+async function loadToday() {
+  try {
+    state.today = await api('/api/today');
+  } catch (err) {
+    state.today = null;
+    toast(`读取今日数据失败：${err.message}`, 'err');
   }
 }
 
-function hashOf() {
-  return (
-    '#' +
-    [state.view, state.scope.category, state.scope.subject, state.scope.chapter]
-      .filter(Boolean)
-      .map(encodeURIComponent)
-      .join('/')
-  );
+function renderToday() {
+  const t = state.today;
+  if (!t) return '<div class="loading"><div class="spinner"></div><p>正在读取今日数据…</p></div>';
+  const cd = t.countdown;
+  const w = t.week;
+  const m = t.mistakes || {};
+
+  const todayTasks = withOcc(t.todayTasks);
+  const undated = withOcc(t.undated);
+  const rest = withOcc(t.restUndone);
+
+  const dayStrip = w?.days?.length
+    ? `<div class="day-strip">${w.days
+        .map(
+          (d) => `<div class="day-cell${d.isToday ? ' is-today' : ''}${d.isPast ? ' is-past' : ''}">
+        <span class="dc-week">${esc(d.weekday)}</span>
+        <span class="dc-date">${esc(d.label)}</span>
+        <span class="dc-count">${d.total ? `${d.done}/${d.total}` : '—'}</span>
+        <span class="dc-bar"><i style="width:${d.total ? Math.round((d.done / d.total) * 100) : 0}%"></i></span>
+      </div>`
+        )
+        .join('')}</div>`
+    : '';
+
+  return `<div class="today">
+    <section class="countdown-card">
+      <div class="cd-main">
+        <div class="cd-label">距离考研还有</div>
+        <div class="cd-days">${cd.days}<span>天</span></div>
+        <div class="cd-sub">${esc(cd.examDate)}　·　约 ${cd.weeks} 周　·　约 ${cd.months} 个月</div>
+      </div>
+      <div class="cd-actions">
+        <button class="btn-primary" data-go="journal">✍️ 写今日复盘${t.review.exists ? '（已有）' : ''}</button>
+        <button class="btn-ghost" data-go="mistakes">📕 去刷错题${m.due ? `（${m.due} 题到期）` : ''}</button>
+      </div>
+    </section>
+
+    <div class="today-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>今天的任务</h3>
+          <span class="hint">${esc(t.date)} ${esc(t.weekday)}　勾选直接写回 Obsidian</span>
+        </div>
+        <div class="panel-body">
+          ${
+            todayTasks.length
+              ? `<ul class="task-list">${todayTasks.map((x) => taskLi(x, { rel: w?.rel })).join('')}</ul>`
+              : '<div class="rv-hint">这周的周计划里没有标今天日期的任务。</div>'
+          }
+          ${
+            undated.length
+              ? `<div class="task-sub">本周其他待办（没标日期）</div>
+                 <ul class="task-list">${undated.map((x) => taskLi(x, { rel: w?.rel })).join('')}</ul>`
+              : ''
+          }
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>本周进度</h3>
+          <span class="hint">${w ? esc(w.title || '') : '没有找到本周计划'}</span>
+        </div>
+        <div class="panel-body">
+          ${dayStrip}
+          ${
+            w
+              ? `<div class="prog-row"><span>本周完成</span>
+                   <div class="progress"><i style="width:${w.rate}%"></i></div>
+                   <b>${w.done}/${w.total}　${w.rate}%</b></div>`
+              : ''
+          }
+          ${
+            t.monthPlan
+              ? `<div class="prog-row"><span>本月完成</span>
+                   <div class="progress"><i style="width:${t.monthPlan.rate}%"></i></div>
+                   <b>${t.monthPlan.done}/${t.monthPlan.total}　${t.monthPlan.rate}%</b></div>`
+              : ''
+          }
+          ${
+            m.total != null
+              ? `<div class="prog-row"><span>错题掌握</span>
+                   <div class="progress"><i style="width:${m.rate}%"></i></div>
+                   <b>${m.done}/${m.total}　${m.rate}%</b></div>`
+              : ''
+          }
+        </div>
+      </section>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">📅 今日完成</div>
+        <div class="stat-value">${t.todayTasks.filter((x) => x.done).length}<span class="unit">/${t.todayTasks.length}</span></div>
+        <div class="stat-foot">今天标了日期的任务</div>
+      </div>
+      <div class="stat-card is-done">
+        <div class="stat-label">✅ 本周完成率</div>
+        <div class="stat-value">${w ? w.rate : 0}<span class="unit">%</span></div>
+        <div class="stat-foot">${w ? `${w.done} / ${w.total} 项` : '—'}</div>
+      </div>
+      <div class="stat-card is-pending">
+        <div class="stat-label">📕 错题待复习</div>
+        <div class="stat-value">${m.pending ?? '—'}</div>
+        <div class="stat-foot">其中 <b>${m.due ?? 0}</b> 题到遗忘曲线了</div>
+      </div>
+      <div class="stat-card is-streak">
+        <div class="stat-label">🔥 连续打卡</div>
+        <div class="stat-value">${m.streak ?? 0}<span class="unit">天</span></div>
+        <div class="stat-foot">错题累计打卡 <b>${m.checkins ?? 0}</b> 次</div>
+      </div>
+    </div>
+
+    <section class="panel" style="margin-top:14px">
+      <div class="panel-head"><h3>本周剩余</h3><span class="hint">还没勾掉的</span></div>
+      <div class="panel-body">
+        ${
+          rest.length
+            ? `<ul class="task-list">${rest.map((x) => taskLi(x, { rel: w?.rel })).join('')}</ul>`
+            : '<div class="rv-hint">本周后面的任务都清掉了 🎉</div>'
+        }
+      </div>
+    </section>
+  </div>`;
+}
+
+/* ---------------- 计划 ---------------- */
+async function loadPlans() {
+  if (state.plans) return;
+  try {
+    state.plans = await api('/api/plans');
+  } catch {
+    state.plans = { plans: [] };
+  }
+}
+
+async function loadPlanDetail(rel) {
+  try {
+    state.planDetail = await api(`/api/plan?rel=${encodeURIComponent(rel)}`);
+  } catch (err) {
+    state.planDetail = null;
+    toast(`读取计划失败：${err.message}`, 'err');
+  }
+}
+
+function renderPlan() {
+  const list = state.plans?.plans || [];
+  const months = [...new Set(list.filter((p) => p.kind === 'month').map((p) => p.month))].sort();
+  const sel = state.planDetail;
+
+  const side = !list.length
+    ? '<div class="rv-hint">还没扫到计划。确认 config.json 里的 planDir 指向 考研/。</div>'
+    : `<div class="plan-months">${[...new Set(list.filter((p) => p.kind === 'week').map((p) => p.month))]
+        .sort()
+        .reverse()
+        .map((mo) => {
+          const weeks = list.filter((p) => p.kind === 'week' && p.month === mo);
+          const mp = list.find((p) => p.kind === 'month' && p.month === mo);
+          const done = weeks.reduce((s, x) => s + x.done, 0);
+          const total = weeks.reduce((s, x) => s + x.total, 0);
+          return `<div class="plan-month">
+          <div class="pm-head"><span>${esc(mo)}</span><b>${total ? Math.round((done / total) * 100) : 0}%</b></div>
+          ${mp ? `<button class="plan-link${state.planRel === mp.rel ? ' is-on' : ''}" data-plan="${esc(mp.rel)}">📅 月计划</button>` : ''}
+          ${weeks
+            .map(
+              (x) =>
+                `<button class="plan-link${state.planRel === x.rel ? ' is-on' : ''}" data-plan="${esc(x.rel)}">
+                  <span class="pl-name">第 ${x.week ?? '?'} 周</span>
+                  <span class="pl-rate">${x.done}/${x.total}</span>
+                  <span class="pl-bar"><i style="width:${x.rate}%"></i></span>
+                </button>`
+            )
+            .join('')}
+        </div>`;
+        })
+        .join('')}</div>`;
+
+  const detail = sel
+    ? `<div class="plan-detail">
+        <div class="plan-head">
+          <h2>${esc(sel.title || sel.fileName)}</h2>
+          <div class="plan-meta">
+            ${sel.range ? `${esc(sel.range.start)} ~ ${esc(sel.range.end)}　·　` : ''}
+            ${sel.done}/${sel.total} 完成（${sel.rate}%）
+          </div>
+          <div class="progress" style="margin-top:10px"><i style="width:${sel.rate}%"></i></div>
+        </div>
+        <div class="plan-body" data-rel="${esc(sel.rel)}">
+          ${
+            sel.kind === 'month'
+              ? `<div class="rv-hint" style="margin-bottom:14px">月计划是索引页，任务在对应的周计划里勾选。</div>
+                 <div class="md-doc">${mdToHtml(sel.content || '')}</div>`
+              : planGroupsHtml(sel)
+          }
+        </div>
+      </div>`
+    : `<div class="panel"><div class="panel-body empty-row">左边选一份计划</div></div>`;
+
+  return `<div class="library">
+    <aside class="sidebar plan-side">${side}</aside>
+    <div>${detail}</div>
+  </div>`;
+}
+
+function planGroupsHtml(plan) {
+  return plan.groups
+    .filter((g) => g.tasks.length)
+    .map((g) => {
+      const done = g.tasks.filter((x) => x.done).length;
+      const items = withOcc(g.tasks);
+      return `<section class="plan-group">
+        <div class="pg-head">
+          <span>${esc(g.name)}</span>
+          <span class="pg-count">${done}/${g.tasks.length}</span>
+        </div>
+        <ul class="task-list">${items.map((x) => taskLi(x, { rel: plan.rel })).join('')}</ul>
+      </section>`;
+    })
+    .join('');
+}
+
+/* ---------------- 笔记 ---------------- */
+async function loadNotes() {
+  if (state.notesTree) return;
+  try {
+    state.notesTree = await api('/api/notes');
+  } catch {
+    state.notesTree = { tree: [], count: 0 };
+  }
+}
+
+async function loadNoteDetail(rel) {
+  try {
+    state.noteDetail = await api(`/api/note?rel=${encodeURIComponent(rel)}`);
+  } catch (err) {
+    state.noteDetail = null;
+    toast(`读取笔记失败：${err.message}`, 'err');
+  }
+}
+
+function noteTreeHtml(nodes, depth = 0) {
+  return nodes
+    .map((n) => {
+      if (n.type === 'dir') {
+        return `<div class="nt-dir" style="--d:${depth}">
+          <div class="nt-name">📁 ${esc(n.name)}</div>
+          ${noteTreeHtml(n.children, depth + 1)}
+        </div>`;
+      }
+      return `<button class="nt-file${state.noteRel === n.rel ? ' is-on' : ''}" style="--d:${depth}" data-note="${esc(n.rel)}" title="${esc(n.rel)}">
+        📄 ${esc(n.name)}
+      </button>`;
+    })
+    .join('');
+}
+
+function renderNotes() {
+  const tree = state.notesTree?.tree || [];
+  const sel = state.noteDetail;
+  const side = tree.length
+    ? `<div class="note-tree">${noteTreeHtml(tree)}</div>`
+    : '<div class="rv-hint">还没扫到笔记。确认 config.json 里的 noteDirs。</div>';
+
+  const detail = sel
+    ? `<article class="note-detail">
+        <div class="note-head">
+          <h2>${esc(sel.rel.split('/').pop().replace(/\.md$/, ''))}</h2>
+          <div class="note-meta">${esc(sel.rel)}　·　${(sel.size / 1024).toFixed(1)} KB</div>
+        </div>
+        <div class="note-body">${mdToHtml(sel.content)}</div>
+      </article>`
+    : `<div class="panel"><div class="panel-body empty-row">左边选一篇笔记</div></div>`;
+
+  return `<div class="library">
+    <aside class="sidebar notes-side">${side}</aside>
+    <div>${detail}</div>
+  </div>`;
+}
+
+/* ---------------- 复盘 ---------------- */
+async function loadJournal(date) {
+  try {
+    state.journals = await api('/api/reviews');
+  } catch {
+    state.journals = { reviews: [] };
+  }
+  const d = date || state.journals.today || new Date().toISOString().slice(0, 10);
+  try {
+    state.journal = await api(`/api/review?date=${d}`);
+  } catch (err) {
+    state.journal = null;
+    toast(`读取复盘失败：${err.message}`, 'err');
+  }
+}
+
+function renderJournal() {
+  const j = state.journal;
+  const list = state.journals?.reviews || [];
+  if (!j) return '<div class="loading"><div class="spinner"></div><p>正在读取复盘…</p></div>';
+
+  const history = list.length
+    ? `<div class="j-list">${list
+        .slice(0, 60)
+        .map(
+          (r) => `<button class="plan-link${r.date === j.date ? ' is-on' : ''}" data-journal="${esc(r.date || '')}">
+        <span class="pl-name">${esc(r.name.replace(/复盘\.md$/, ''))}</span>
+        <span class="pl-rate">${r.date ? '' : '·'}</span>
+      </button>`
+        )
+        .join('')}</div>`
+    : '<div class="rv-hint">还没有复盘记录。</div>';
+
+  return `<div class="library">
+    <aside class="sidebar plan-side">
+      <div class="filter-group"><h4>历史复盘</h4>${history}</div>
+    </aside>
+    <div class="journal">
+      <div class="plan-head">
+        <h2>${esc(j.date)} 复盘</h2>
+        <div class="plan-meta">
+          ${j.exists ? '这篇已存在，保存会覆盖（自动备份）' : '新建'}　·　
+          <code>${esc(j.rel)}</code>
+        </div>
+      </div>
+      <textarea id="journalText" class="journal-edit" rows="18" placeholder="今天做了什么、卡在哪、明天怎么调整…">${esc(j.content)}</textarea>
+      <div class="rv-start-row">
+        <button class="btn-primary" data-journal-save="1">💾 保存到 Obsidian</button>
+        <button class="btn-ghost" data-journal-today="1">回到今天</button>
+        <span class="rv-hint">保存路径：${esc(j.rel)}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveJournal() {
+  const j = state.journal;
+  if (!j) return;
+  const content = document.getElementById('journalText')?.value ?? '';
+  try {
+    const out = await api('/api/review', { method: 'POST', body: JSON.stringify({ date: j.date, content }) });
+    await loadJournal(j.date);
+    render();
+    toast(`已保存到 ${out.rel}`, 'ok');
+  } catch (err) {
+    toast(`保存失败：${err.message}`, 'err');
+  }
+}
+
+/** 勾选任务 → 写回 Obsidian */
+async function togglePlanTask(input) {
+  const rel = input.dataset.rel;
+  const text = input.dataset.text;
+  const occ = Number(input.dataset.occ) || 0;
+  const done = input.checked;
+  if (!rel) {
+    toast('这条任务没有来源文件，无法写回', 'err');
+    input.checked = !done;
+    return;
+  }
+  input.disabled = true;
+  try {
+    await api('/api/task', { method: 'POST', body: JSON.stringify({ rel, expect: text, occurrence: occ, done }) });
+    state.planDetail = null;
+    state.plans = null;
+    await loadToday();
+    await loadPlans();
+    if (state.planRel) await loadPlanDetail(state.planRel);
+    render();
+    toast(done ? `已勾选：${text.slice(0, 18)}…` : '已取消勾选', 'ok');
+  } catch (err) {
+    input.checked = !done;
+    toast(`写回失败：${err.message}`, 'err');
+  } finally {
+    input.disabled = false;
+  }
+}
+
+function render() {
+  const main = $('#main');
+
+  let body = '';
+  if (state.module === 'today') body = renderToday();
+  else if (state.module === 'plan') body = renderPlan();
+  else if (state.module === 'notes') body = renderNotes();
+  else if (state.module === 'journal') body = renderJournal();
+  else {
+    if (!state.data || !state.stats) {
+      main.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在读取错题本…</p></div>';
+      return;
+    }
+    if (state.sub === 'dashboard') body = renderDashboard();
+    else if (state.sub === 'library') body = renderLibrary();
+    else if (state.sub === 'drill') body = renderReview();
+    else if (state.sub === 'solve') body = renderSolve();
+    else body = renderAdd();
+  }
+
+  main.innerHTML = body;
+
+  const inMistakes = state.module === 'mistakes';
+  if (inMistakes && state.data) renderScopeButton();
+  $('#scopePicker').hidden = !inMistakes || state.sub === 'add' || state.sub === 'solve';
+  document.body.classList.toggle('is-solving', inMistakes && state.sub === 'solve');
+  $('#mistakeSubnav').hidden = !inMistakes;
+  if (state.pickerOpen && inMistakes) $('#scopeMenu').innerHTML = renderScopeMenu();
+
+  for (const btn of document.querySelectorAll('.tab')) {
+    btn.classList.toggle('is-active', btn.dataset.module === state.module);
+  }
+  for (const btn of document.querySelectorAll('.subtab')) {
+    btn.classList.toggle('is-active', btn.dataset.sub === state.sub);
+  }
+}
+
+/** 错题模块的二级导航 */
+function renderMistakeSubnav() {
+  const items = [
+    ['dashboard', '总览'],
+    ['library', '题库'],
+    ['drill', '复习'],
+    ['add', '增题'],
+  ];
+  return `<nav class="subnav" id="mistakeSubnav" hidden>${items
+    .map(([k, label]) => `<button class="subtab" data-sub="${k}">${label}</button>`)
+    .join('')}</nav>`;
+}
+
+/* ============================================================
+   路由：#模块/子视图/范围…
+   ============================================================ */
+function buildHash({ module, sub, scope, solveId, rel }) {
+  const seg = [module];
+  if (module === 'mistakes') {
+    seg.push(sub);
+    if (sub === 'solve') {
+      if (solveId) seg.push(solveId);
+    } else {
+      if (scope?.category) seg.push(scope.category);
+      if (scope?.subject) seg.push(scope.subject);
+      if (scope?.chapter) seg.push(scope.chapter);
+    }
+  } else if ((module === 'notes' || module === 'plan') && rel) {
+    seg.push(...String(rel).split('/'));
+  }
+  return '#' + seg.filter(Boolean).map(encodeURIComponent).join('/');
 }
 
 function applyHash() {
@@ -1753,48 +2210,95 @@ function applyHash() {
     .split('/')
     .filter(Boolean)
     .map(decodeURIComponent);
-  const view = VIEWS.includes(parts[0]) ? parts[0] : 'dashboard';
+  const module = MODULES.includes(parts[0]) ? parts[0] : 'today';
+  state.module = module;
 
-  // 做题模式： #solve/<题目 id>，不走范围
-  if (view === 'solve') {
-    const id = parts[1] || null;
-    state.view = 'solve';
-    if (id && state.solve.id !== id) enterSolve(id);
-    if (!id) closeSolve();
-    if (state.data) render();
-    startSolveTimer();
-    return;
-  }
-  closeSolve();
+  if (module === 'mistakes') {
+    const sub = SUBVIEWS.includes(parts[1]) ? parts[1] : 'dashboard';
+    state.sub = sub;
+    state.view = sub;
 
-  state.view = view;
-  state.scope = { category: parts[1] || null, subject: parts[2] || null, chapter: parts[3] || null };
-  if (state.data) {
+    if (sub === 'solve') {
+      const id = parts[2] || null;
+      if (id && state.solve.id !== id) enterSolve(id);
+      if (!id) closeSolve();
+      render();
+      startSolveTimer();
+      return;
+    }
+    closeSolve();
+    state.scope = { category: parts[2] || null, subject: parts[3] || null, chapter: parts[4] || null };
     render();
     refreshStats();
+    if (sub === 'drill' && state.review.phase === 'run') startReviewTimer();
+    else stopReviewTimer();
+    if (sub === 'add') loadUploads().then(() => render());
+    return;
   }
-  if (view === 'review' && state.review.phase === 'run') startReviewTimer();
-  else if (view !== 'review') stopReviewTimer();
 
-  if (view === 'add' && !state.add.uploads.length) loadUploads().then(() => render());
+  closeSolve();
+  stopReviewTimer();
+  closeSolveTimerOnly();
+
+  if (module === 'plan') {
+    const rel = parts.slice(1).join('/') || null;
+    state.planRel = rel;
+    loadPlans().then(() => (rel ? loadPlanDetail(rel) : null)).then(() => render());
+    render();
+    return;
+  }
+  if (module === 'notes') {
+    const rel = parts.slice(1).join('/') || null;
+    state.noteRel = rel;
+    loadNotes().then(() => (rel ? loadNoteDetail(rel) : null)).then(() => render());
+    render();
+    return;
+  }
+  if (module === 'journal') {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(parts[1] || '') ? parts[1] : null;
+    state.journalDate = date;
+    loadJournal(date).then(() => render());
+    render();
+    return;
+  }
+
+  // 今日
+  loadToday().then(() => render());
+  render();
+}
+
+function closeSolveTimerOnly() {
+  /* 占位：切走模块时停掉做题计时 */
+  if (state.solve.timerId) {
+    clearInterval(state.solve.timerId);
+    state.solve.timerId = null;
+  }
 }
 
 function go(patch = {}) {
-  const next = {
-    view: patch.view ?? state.view,
-    category: patch.category !== undefined ? patch.category : state.scope.category,
-    subject: patch.subject !== undefined ? patch.subject : state.scope.subject,
-    chapter: patch.chapter !== undefined ? patch.chapter : state.scope.chapter,
-  };
-  // 上层变了就清掉下层
-  if (patch.category !== undefined && patch.category !== state.scope.category) {
-    next.subject = null;
-    next.chapter = null;
-  }
-  if (patch.subject !== undefined && patch.subject !== state.scope.subject) next.chapter = null;
+  const module = patch.module ?? state.module;
+  const sub = patch.sub ?? state.sub;
 
-  const hash =
-    '#' + [next.view, next.category, next.subject, next.chapter].filter(Boolean).map(encodeURIComponent).join('/');
+  if (module === 'mistakes') {
+    const scope = {
+      category: patch.category !== undefined ? patch.category : state.scope.category,
+      subject: patch.subject !== undefined ? patch.subject : state.scope.subject,
+      chapter: patch.chapter !== undefined ? patch.chapter : state.scope.chapter,
+    };
+    if (patch.category !== undefined && patch.category !== state.scope.category) {
+      scope.subject = null;
+      scope.chapter = null;
+    }
+    if (patch.subject !== undefined && patch.subject !== state.scope.subject) scope.chapter = null;
+    state.scope = scope;
+    const hash = buildHash({ module, sub, scope, solveId: state.solve.id });
+    if (location.hash !== hash) location.hash = hash;
+    else applyHash();
+    return;
+  }
+
+  const rel = patch.rel !== undefined ? patch.rel : module === 'journal' ? state.journalDate : state.planRel ?? state.noteRel;
+  const hash = buildHash({ module, rel: module === 'plan' || module === 'notes' ? rel : patch.rel });
   if (location.hash !== hash) location.hash = hash;
   else applyHash();
 }
@@ -1840,7 +2344,12 @@ async function refreshStats() {
 function bindEvents() {
   $('#tabs').addEventListener('click', (e) => {
     const btn = e.target.closest('.tab');
-    if (btn) go({ view: btn.dataset.view });
+    if (btn) go({ module: btn.dataset.module });
+  });
+
+  $('#mistakeSubnav').addEventListener('click', (e) => {
+    const btn = e.target.closest('.subtab');
+    if (btn) go({ module: 'mistakes', sub: btn.dataset.sub });
   });
 
   window.addEventListener('hashchange', applyHash);
@@ -1864,6 +2373,11 @@ function bindEvents() {
   });
   document.addEventListener('click', (e) => {
     if (state.pickerOpen && !e.target.closest('#scopePicker')) closePicker();
+  });
+
+  // 任务勾选 → 写回 Obsidian
+  $('#main').addEventListener('change', (e) => {
+    if (e.target.matches('input[data-task]')) togglePlanTask(e.target);
   });
 
   // 图片选择与拖拽
@@ -1897,7 +2411,7 @@ function bindEvents() {
 
   $('#search').addEventListener('input', (e) => {
     state.q = e.target.value;
-    if (state.q && state.view !== 'library') go({ view: 'library' });
+    if (state.q && !(state.module === 'mistakes' && state.sub === 'library')) go({ module: 'mistakes', sub: 'library' });
     else render();
   });
 
@@ -1941,7 +2455,7 @@ function bindEvents() {
       if (action === 'record') return requestReviewRecord(rv.dataset.result);
       if (action === 'skip') return skipReview();
       if (action === 'exit') return exitReview();
-      if (action === 'back') return go({ view: 'dashboard' });
+      if (action === 'back') return go({ module: 'mistakes', sub: 'dashboard' });
     }
 
     const add = e.target.closest('[data-add]');
@@ -1990,7 +2504,7 @@ function bindEvents() {
     const sv = e.target.closest('[data-solve]');
     if (sv) {
       const a = sv.dataset.solve;
-      if (a === 'exit') return go({ view: 'library' });
+      if (a === 'exit') return go({ module: 'mistakes', sub: 'library' });
       if (a === 'reveal') {
         state.solve.revealed = true;
         return render();
@@ -2021,6 +2535,23 @@ function bindEvents() {
     const solveStart = e.target.closest('[data-solve-start]');
     if (solveStart) return goSolve(solveStart.dataset.solveStart);
 
+    // study 各页的跳转
+    const goBtn = e.target.closest('[data-go]');
+    if (goBtn) {
+      const v = goBtn.dataset.go;
+      if (v === 'journal') return go({ module: 'journal' });
+      if (v === 'mistakes') return go({ module: 'mistakes', sub: 'dashboard' });
+      return go({ module: v });
+    }
+    const planBtn = e.target.closest('[data-plan]');
+    if (planBtn) return go({ module: 'plan', rel: planBtn.dataset.plan });
+    const noteBtn = e.target.closest('[data-note]');
+    if (noteBtn) return go({ module: 'notes', rel: noteBtn.dataset.note });
+    const jBtn = e.target.closest('[data-journal]');
+    if (jBtn && jBtn.dataset.journal) return go({ module: 'journal', rel: jBtn.dataset.journal });
+    if (e.target.closest('[data-journal-save]')) return saveJournal();
+    if (e.target.closest('[data-journal-today]')) return go({ module: 'journal' });
+
     const open = e.target.closest('[data-open]');
     if (open) return openDrawer(open.dataset.open);
 
@@ -2030,7 +2561,7 @@ function bindEvents() {
       state.filters = { status: null, difficulty: null, heat: null, point: ptRow.dataset.point };
       state.q = '';
       $('#search').value = '';
-      return go({ view: 'library' });
+      return go({ module: 'mistakes', sub: 'library' });
     }
 
     const fchip = e.target.closest('[data-filter]');
@@ -2101,7 +2632,7 @@ function bindEvents() {
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
 
     // 全屏做题模式
-    if (state.view === 'solve' && !typing) {
+    if (state.module === 'mistakes' && state.sub === 'solve' && !typing) {
       if (e.key === ' ') {
         e.preventDefault();
         if (!state.solve.revealed) {
@@ -2119,12 +2650,12 @@ function bindEvents() {
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        return go({ view: 'library' });
+        return go({ module: 'mistakes', sub: 'library' });
       }
       return;
     }
 
-    if (state.view === 'review' && state.review.phase === 'run' && !typing) {
+    if (state.module === 'mistakes' && state.sub === 'drill' && state.review.phase === 'run' && !typing) {
       const r = state.review;
       if (e.key === ' ') { e.preventDefault(); return revealReview(); }
       if (['1', '2', '3'].includes(e.key)) {
@@ -2148,7 +2679,7 @@ function bindEvents() {
    ============================================================ */
 function goSolve(id) {
   closeDrawer();
-  const h = `#solve/${encodeURIComponent(id)}`;
+  const h = buildHash({ module: 'mistakes', sub: 'solve', solveId: id });
   if (location.hash === h) applyHash();
   else location.hash = h;
 }

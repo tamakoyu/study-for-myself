@@ -223,7 +223,18 @@ export function summarize(checkins, nowStr = today()) {
     };
   }
 
-  const status = perfect === 0 ? (done.length ? '进行中' : '未做') : schedule.isDue ? '到期' : '完成';
+  // 状态判定：最近一次就做错/做得不顺 → 不算完成，回到待复习
+  const lastWasFlop = !!lastDated && lastDated.result !== '完美';
+  const status =
+    perfect === 0
+      ? done.length
+        ? '进行中'
+        : '未做'
+      : lastWasFlop
+        ? '进行中'
+        : schedule.isDue
+          ? '到期'
+          : '完成';
 
   // ── 用时 ──
   const secs = done.map((c) => c.seconds).filter((n) => typeof n === 'number' && n > 0);
