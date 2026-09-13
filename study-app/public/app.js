@@ -367,8 +367,17 @@ function sparkline(trend) {
 /* ============================================================
    总览：四层 —— 全部 / 大类 / 科目 / 章节
    ============================================================ */
+/**
+ * 复习进度：已复习 / 总题数。
+ * 一道题都没有的科目 / 大类算 100%（没有欠着的题），不是 0%
+ * —— 否则 408 明明 0 个待复习，进度条却是空的。
+ */
+const progressRate = (total, done) => (total ? Math.round((done / total) * 100) : 100);
+
 function statCards(stats, extra = []) {
-  const t = stats.totals;
+  const t = stats.totals || {};
+  // 后端字段变了、页面还是老的缓存时，宁可显示 0 也不要满屏 undefined
+  const num = (v) => (Number.isFinite(v) ? v : 0);
   return `<div class="stat-grid">
     <div class="stat-card">
       <div class="stat-label">题目总数</div>
@@ -377,24 +386,24 @@ function statCards(stats, extra = []) {
     </div>
     <div class="stat-card is-done">
       <div class="stat-label">✅ 已复习</div>
-      <div class="stat-value">${t.done}</div>
-      <div class="stat-foot">做过的题都排进了遗忘曲线 · <b>${t.completionRate}%</b></div>
-      <div class="progress"><i style="width:${t.completionRate}%"></i></div>
+      <div class="stat-value">${num(t.done)}</div>
+      <div class="stat-foot">做过的题都排进了遗忘曲线 · <b>${num(t.completionRate)}%</b></div>
+      <div class="progress"><i style="width:${num(t.completionRate)}%"></i></div>
     </div>
     <div class="stat-card is-pending">
       <div class="stat-label">⏳ 待复习</div>
-      <div class="stat-value">${t.pending}</div>
-      <div class="stat-foot">到日子了 <b>${t.due}</b> · 一次没做 <b>${t.untouched}</b></div>
+      <div class="stat-value">${num(t.pending)}</div>
+      <div class="stat-foot">刚加的 + 复习到期的，都算在这里</div>
     </div>
     <div class="stat-card is-streak">
       <div class="stat-label">累计打卡</div>
-      <div class="stat-value">${t.checkins}<span style="font-size:15px;font-weight:500;color:var(--text-3)"> 次</span></div>
-      <div class="stat-foot">完美 <b>${t.byResult['完美']}</b> · 普通 <b>${t.byResult['普通']}</b> · 失败 <b>${t.byResult['失败']}</b></div>
+      <div class="stat-value">${num(t.checkins)}<span style="font-size:15px;font-weight:500;color:var(--text-3)"> 次</span></div>
+      <div class="stat-foot">完美 <b>${num(t.byResult?.['完美'])}</b> · 普通 <b>${num(t.byResult?.['普通'])}</b> · 失败 <b>${num(t.byResult?.['失败'])}</b></div>
     </div>
     <div class="stat-card">
       <div class="stat-label">🔥 连续打卡</div>
-      <div class="stat-value">${t.streak}<span style="font-size:15px;font-weight:500;color:var(--text-3)"> 天</span></div>
-      <div class="stat-foot">有打卡记录的天数 <b>${t.activeDays}</b> 天</div>
+      <div class="stat-value">${num(t.streak)}<span style="font-size:15px;font-weight:500;color:var(--text-3)"> 天</span></div>
+      <div class="stat-foot">有打卡记录的天数 <b>${num(t.activeDays)}</b> 天</div>
     </div>
   </div>`;
 }
@@ -460,15 +469,19 @@ function subjectCards(node) {
   const total = node.children.reduce((s, c) => s + c.total, 0);
   return `<div class="subject-grid">${node.children
     .map((sub) => {
-      const rate = sub.total ? Math.round((sub.done / sub.total) * 100) : 0;
+      const rate = progressRate(sub.total, sub.done);
       return `<article class="subject-card" data-scope="subject" data-value="${esc(sub.name)}">
       <div class="sc-head"><span class="sc-name">${esc(sub.name)}</span>
         <span class="sc-count">${sub.total}<small>题</small></span></div>
       <div class="progress"><i style="width:${rate}%"></i></div>
       <div class="sc-foot">
-        <span>✅ 已复习 <b>${sub.done}</b></span>
-        <span>⏳ 待复习 <b>${sub.total - sub.done}</b></span>
-        <span>占比 <b>${total ? Math.round((sub.total / total) * 100) : 0}%</b></span>
+        ${
+          sub.total
+            ? `<span>✅ 已复习 <b>${sub.done}</b></span>
+               <span>⏳ 待复习 <b>${sub.total - sub.done}</b></span>
+               <span>占比 <b>${total ? Math.round((sub.total / total) * 100) : 0}%</b></span>`
+            : `<span>还没有题</span><span><b>100%</b>（没有欠着的）</span>`
+        }
       </div>
       <div class="sc-chapters">${sub.children.length ? sub.children.map((c) => `${esc(c.name)} <em>${c.total}</em>`).join(' · ') : '<em>还没有章节</em>'}</div>
     </article>`;
@@ -482,7 +495,7 @@ function insightPanels(stats) {
 
   if (stats.due && stats.due.length) {
     parts.push(`<section class="panel" style="margin-top:14px">
-      <div class="panel-head"><h3>⏰ 遗忘曲线提醒</h3><span class="hint">做过的题按掌握等级 1 / 2 / 4 / 7 / 15 / 30 / 60 天回到队列，这些已到点</span></div>
+      <div class="panel-head"><h3>⏰ 遗忘曲线提醒</h3><span class="hint">做对一次隔 4 天、再对一次 8 天、翻倍往上（1 → 4 → 8 → 16 → 32 → 64 …），到点才回队列；这些已到点</span></div>
       <div class="table-wrap"><table class="data">
         <thead><tr><th>题目</th><th>科目</th><th>章节</th><th>掌握等级</th><th>当前间隔</th><th>已过期</th></tr></thead>
         <tbody>${stats.due
@@ -586,7 +599,7 @@ function renderDashboard() {
       <div class="category-grid" style="margin-top:14px">
         ${cats
           .map((c) => {
-            const rate = c.total ? Math.round((c.done / c.total) * 100) : 0;
+            const rate = progressRate(c.total, c.done);
             return `<article class="category-card" data-scope="category" data-value="${esc(c.name)}">
           <div class="cc-head">
             <span class="cc-mark">${c.name === '数学' ? '📐' : c.name === '408' ? '💻' : '📚'}</span>
@@ -594,7 +607,11 @@ function renderDashboard() {
             <span class="cc-count">${c.total}<small>题</small></span>
           </div>
           <div class="progress"><i style="width:${rate}%"></i></div>
-          <div class="cc-foot"><span>✅ 已复习 ${c.done}</span><span>⏳ 待复习 ${c.total - c.done}</span><span>${rate}%</span></div>
+          <div class="cc-foot">${
+            c.total
+              ? `<span>✅ 已复习 ${c.done}</span><span>⏳ 待复习 ${c.total - c.done}</span><span>${rate}%</span>`
+              : `<span>还没有题</span><span>${rate}%（没有欠着的）</span>`
+          }</div>
           <div class="cc-chapters">${c.children.map((s) => `${esc(s.name)} <em>${s.total}</em>`).join(' ／ ') || '<em>还没有科目</em>'}</div>
           <div class="cc-enter">进入 ${esc(c.name)} 总览 →</div>
         </article>`;
@@ -876,7 +893,8 @@ function renderDrawer(id) {
     <section class="do-panel">
       <div class="drawer-actions">
         <button class="btn-ghost small" data-doc-open="${esc(p.vaultRel || p.relPath)}">📄 本题原文</button>
-        <button class="btn-ghost small" data-topup="${esc(p.id)}" title="在 Obsidian 里把打卡位置勾完了，点这里再续几组">➕ 续上打卡位置</button>
+        <button class="btn-ghost small" data-topup="${esc(p.id)}"
+          title="笔记里还剩 ${Math.round((p.emptyCheckins || 0) / 3)} 次空白位置。在 Obsidian 里把它们勾完了、没得勾了，点这里再续 3 次">➕ 续上打卡位置（还剩 ${Math.round((p.emptyCheckins || 0) / 3)} 次）</button>
       </div>
       <button class="btn-primary big" data-solve-start="${esc(p.id)}">▶ 开始做题（全屏）</button>
       <div class="do-hint">进全屏做题模式：解析和错因都会藏起来，做完在那边打卡。</div>
@@ -2158,8 +2176,8 @@ function renderToday() {
       </div>
       <div class="stat-card is-pending">
         <div class="stat-label">📕 错题待复习</div>
-        <div class="stat-value">${m.pending ?? '—'}</div>
-        <div class="stat-foot">其中 <b>${m.due ?? 0}</b> 题到遗忘曲线了</div>
+        <div class="stat-value">${m.pending ?? 0}</div>
+        <div class="stat-foot">刚加的 + 复习到期的，都算在这里</div>
       </div>
       <div class="stat-card is-streak">
         <div class="stat-label">🔥 连续打卡</div>
@@ -3082,7 +3100,9 @@ async function topUpCheckins(id) {
     const out = await api('/api/checkin-slots', { method: 'POST', body: JSON.stringify({ id }) });
     await reload({ silent: true });
     toast(
-      out.added > 0 ? `已续上 ${out.added} 组打卡位置（第 4、5、6 次这样的）` : '打卡位置还够用，不用续',
+      out.added > 0
+        ? `已续上 ${out.added} 次空白打卡位置（笔记里那张 \`- [ ] 第 N 次\` 列表）`
+        : '还够勾，不用续 —— 这个按钮只在笔记里的打卡位置勾完了才有用',
       'ok'
     );
   } catch (err) {

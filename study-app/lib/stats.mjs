@@ -11,6 +11,15 @@ import { today } from './parse.mjs';
 
 const STATUS_LABEL = { 已复习: '✅ 已复习', 待复习: '⏳ 待复习', 未做: '⭕ 未做' };
 
+/**
+ * 复习进度：已复习 / 总题数。
+ * 一个大类**一道题都没有**时不显示 0%，而是算 100% —— 没有欠着的题，
+ * 显示 0% 会让人以为「408 全没复习」。
+ */
+export function progressRate(total, done) {
+  return total ? Math.round((done / total) * 100) : 100;
+}
+
 export function statusLabel(status) {
   return STATUS_LABEL[status] || status;
 }
@@ -102,7 +111,7 @@ export function computeStats(problems, tree = []) {
     total: node.total,
     done: node.done,
     pending: node.total - node.done,
-    rate: node.total ? Math.round((node.done / node.total) * 100) : 0,
+    rate: progressRate(node.total, node.done),
   });
 
   return {
@@ -115,7 +124,7 @@ export function computeStats(problems, tree = []) {
       pending: due + untouched,
       checkins: checkinsAll.length,
       byResult,
-      completionRate: total ? Math.round((done / total) * 100) : 0,
+      completionRate: progressRate(total, done),
       streak,
       activeDays: activeDates.size,
     },

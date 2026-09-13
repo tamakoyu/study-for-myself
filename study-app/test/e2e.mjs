@@ -164,18 +164,47 @@ await s.shot('15-today');
 // 勾一条今日任务 → 应写回 Obsidian
 const planPath = '考研/2026-09/2026-09-第2周-周计划.md';
 const beforePlan = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
-const undoneTask = beforePlan.groups.flatMap((g) => g.tasks).find((x) => !x.done);
-await s.js(`document.querySelectorAll('.task-list input[data-task]')[0].click();`);
-await sleep(1600);
-const afterPlan = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
-const nowDone = afterPlan.groups.flatMap((g) => g.tasks).filter((x) => x.done).length;
-check('今日：勾选任务写回 Obsidian', nowDone === beforePlan.done + 1, `${beforePlan.done} → ${nowDone} 已完成`);
-check('今日：写回带上了完成日期', afterPlan.groups.flatMap((g) => g.tasks).some((x) => x.doneDate === new Date().toISOString().slice(0, 10)));
-// 再点一次取消
-await s.js(`document.querySelectorAll('.task-list input[data-task]')[0].click();`);
-await sleep(1600);
-const reverted = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
-check('今日：再点一次可取消勾选', reverted.done === beforePlan.done, `${reverted.done} 项已完成`);
+// 今日页只列「今天该做的」，顺序和计划文件里的排列不一样；
+// 而且你平时可能已经把今天的任务全勾了 —— 所以不假设初始状态，
+// 只验证「点一下 → 文件真的变了」「再点一下 → 变回来」。
+const probeTask = await s.js(
+  `var b=document.querySelector('.task-list input[data-task]');
+   return b ? JSON.stringify({ text: b.dataset.text, checked: b.checked }) : 'NONE';`
+);
+const picked = probeTask === 'NONE' ? null : JSON.parse(probeTask);
+check('今日：任务列表渲染出了可点的复选框', !!picked, picked ? `${picked.text.slice(0, 20)}（当前${picked.checked ? '已勾' : '未勾'}）` : 'NONE');
+
+const clickTask = (text, want) =>
+  s.js(
+    `var b=[...document.querySelectorAll('.task-list input[data-task]')]
+       .find(x=>x.dataset.text===${JSON.stringify(picked ? picked.text : '')} && x.checked===${want});
+     if(!b) return 'NONE'; b.click(); return 'ok';`
+  );
+
+if (picked) {
+  const firstClick = await clickTask(picked.text, picked.checked);
+  check('今日：点得到那条任务', firstClick === 'ok', firstClick);
+  await sleep(1600);
+  const afterPlan = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
+  const nowDone = afterPlan.groups.flatMap((g) => g.tasks).filter((x) => x.done).length;
+  const delta = picked.checked ? -1 : 1;
+  check(
+    '今日：勾选 / 取消都真的写回 Obsidian',
+    nowDone === beforePlan.done + delta,
+    `${beforePlan.done} → ${nowDone} 已完成（${picked.checked ? '取消' : '勾上'}）`
+  );
+  if (!picked.checked) {
+    check(
+      '今日：写回带上了完成日期',
+      afterPlan.groups.flatMap((g) => g.tasks).some((x) => x.doneDate === new Date().toISOString().slice(0, 10))
+    );
+  }
+  // 再点一次，还原成原样
+  await clickTask(picked.text, !picked.checked);
+  await sleep(1600);
+  const reverted = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();
+  check('今日：再点一次能还原（测试不留脏数据）', reverted.done === beforePlan.done, `${reverted.done} 项已完成`);
+}
 
 /* ---------- 0.5 计划页 ---------- */
 await s.js(`document.querySelector('.tab[data-module="plan"]').click();`);
@@ -531,10 +560,10 @@ await s.js(`document.querySelector('.doc-screen [data-doc-raw]').click();`);
 await sleep(600);
 
 /* ---------- 1. 错题模块：先造一道「遗忘曲线到期」的题 ---------- */
-// 用 3 天前做「完美」的方式，让间隔 1 天的排期立刻到期（不依赖外部预置数据）
+// 用 6 天前做「完美」的方式，让间隔 4 天的排期到期（等级 1 → 4 天）
 const seedList = await (await fetch(`${APP}/api/questions`)).json();
 const seedTarget = seedList.problems.find((x) => x.chapter === '函数');
-const back3 = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+const back3 = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
 await api2('/api/checkin', {
   method: 'POST',
   body: JSON.stringify({ id: seedTarget.id, result: '完美', date: back3, seconds: 180 }),
@@ -552,6 +581,16 @@ const cats = await s.js(
   `return [...document.querySelectorAll('.category-card')].map(c=>c.querySelector('.cc-name').textContent.trim());`
 );
 check('总览首页：两类大卡都在（含 0 题的 408）', cats.length === 2 && cats.includes('数学') && cats.includes('408'), cats.join(' / '));
+// 0 题的大类不该显示 0%（那看着像「全没复习」），应该算 100%
+const emptyCard = await s.js(
+  `var c=[...document.querySelectorAll('.category-card')].find(x=>x.querySelector('.cc-name').textContent.trim()==='408');
+   return c ? c.querySelector('.cc-foot').textContent.replace(/\\s+/g,' ').trim() : 'NO';`
+);
+check(
+  '总览首页：0 题的大类进度算 100%，不是 0%',
+  emptyCard.includes('100%') && !emptyCard.replace('100%', '').includes('0%'),
+  emptyCard
+);
 
 const mathCard = await s.js(
   `var c=[...document.querySelectorAll('.category-card')].find(x=>x.querySelector('.cc-name').textContent.trim()==='数学');
@@ -721,21 +760,25 @@ const curve = await api2('/api/checkin', { method: 'POST', body: JSON.stringify(
 const c1 = await (await fetch(`${APP}/api/questions`)).json();
 const afterPerfect1 = c1.problems.find((p) => p.id === solveId);
 check(
-  '遗忘曲线：失败后做一次完美 → 等级 1、间隔 2 天',
-  afterPerfect1.stats.schedule.level === 1 && afterPerfect1.stats.schedule.interval === 2,
+  '遗忘曲线：失败后做一次完美 → 等级 1、间隔 4 天',
+  afterPerfect1.stats.schedule.level === 1 && afterPerfect1.stats.schedule.interval === 4,
   `第 ${afterPerfect1.stats.schedule.level} 级 · ${afterPerfect1.stats.schedule.interval} 天`
 );
 await api2('/api/checkin', { method: 'POST', body: JSON.stringify({ id: solveId, result: '完美' }) });
 const c2 = await (await fetch(`${APP}/api/questions`)).json();
 const afterPerfect2 = c2.problems.find((p) => p.id === solveId);
 check(
-  '遗忘曲线：第二次完美 → 等级 2、间隔 4 天（越掌握隔得越久）',
-  afterPerfect2.stats.schedule.level === 2 && afterPerfect2.stats.schedule.interval === 4,
+  '遗忘曲线：第二次完美 → 等级 2、间隔 8 天（每对一次翻一倍，没有 60 天上限）',
+  afterPerfect2.stats.schedule.level === 2 && afterPerfect2.stats.schedule.interval === 8,
   `第 ${afterPerfect2.stats.schedule.level} 级 · ${afterPerfect2.stats.schedule.interval} 天`
 );
 // 「续上打卡位置」：位置够用时不动文件；在 Obsidian 里勾完了能一键续上
 const enough = await api2('/api/checkin-slots', { method: 'POST', body: JSON.stringify({ id: solveId }) });
 check('打卡：位置够用时「续上」不会重复写', enough.added === 0, `added=${enough.added}`);
+const topupBtn = await s.js(
+  `var b=document.querySelector('#drawerPanel [data-topup]'); return b ? b.textContent.replace(/\\s+/g,' ').trim() : 'NO';`
+);
+check('详情：「续上打卡位置」按钮在，并且写着还剩几次', topupBtn.includes('续上打卡位置') && topupBtn.includes('还剩'), topupBtn);
 const beforeTopUp = (await (await fetch(`${APP}/api/questions`)).json()).problems.find((p) => p.id === solveId);
 const doneBeforeTopUp = beforeTopUp.checkins.filter((c) => c.done).length;
 const raw = fs.readFileSync(beforeTopUp.absPath, 'utf8');
@@ -816,7 +859,10 @@ await s.shot('05-review-setup');
 await s.js(`document.querySelector('[data-scope="reset"]').click();`);
 await sleep(800);
 const poolAll = await s.js(`return document.querySelector('.rv-pool')?.textContent.trim();`);
-check('复习：全部混刷可选 10 题', poolAll === '10 题', poolAll || '(空)');
+const expectPool = (await (await fetch(`${APP}/api/questions`)).json()).problems.filter(
+  (p) => p.kind === 'mistakes' && p.stats.status !== '已复习'
+).length;
+check('复习：全部混刷 = 还没复习完的题', poolAll === `${expectPool} 题`, `${poolAll}（应为 ${expectPool}）`);
 
 await s.js(`[...document.querySelectorAll('[data-scope="category"]')].find(x=>x.dataset.value==='408').click();`);
 await sleep(800);

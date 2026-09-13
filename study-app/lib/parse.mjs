@@ -32,14 +32,18 @@ const CHECKIN_RE =
 const REASON_LINE_RE = /^(?:>\s*)?\*\*首次错因\*\*\s*[　\s]*(.*)$/m;
 
 /**
- * 遗忘曲线间隔（天），下标就是「掌握等级」：
- *   0 → 1 天　1 → 2 天　2 → 4 天 … 6 → 60 天
- * 每做到一次「完美」升一级 → 越掌握，隔得越久；「普通」降一级 → 提醒得早一点。
- * 「失败」打回 0 级 → 明天再来（艾宾浩斯最前面那一段）。
+ * 遗忘曲线间隔（天），下标就是「掌握等级」。
+ *
+ * 规则很简单：**做错 → 0 级 → 明天再来；做对一次 → 4 天；之后每做对一次翻一倍。**
+ * 所以越掌握隔得越久，而且**没有「最多只能 60 天」这种上限** ——
+ * 连对 9 次的题要 1000 多天（三年）后才会再出现，等于不用再管它了。
+ *
+ * 这是「遗忘临界点」的做法（墨墨那套）：间隔拉到刚好快要忘掉为止，
+ * 而不是背完第二天、第三天…天天回来（那样等于没拉开间隔，白费功夫）。
  *
  * 不管做对没做对，**做了就标记「已复习」并排下一次**；到日子了自动变成「待复习」。
  */
-export const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60];
+export const REVIEW_INTERVALS = [1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
 /* ---------------- 日期小工具（本地时区，避免 UTC 偏移） ---------------- */
 export function today(d = new Date()) {
@@ -202,7 +206,8 @@ export function summarize(checkins, nowStr = today()) {
   const lastDated = dated.length ? dated[dated.length - 1] : null;
 
   // ── 遗忘曲线：按日期把历史逐条重放，算出当前的「掌握等级」 ──
-  //   完美 → 升一级（间隔更长）｜普通 → 降一级（提醒更早）｜失败 → 打回 0 级（最快）
+  //   完美 → 升一级（间隔翻倍：4 → 8 → 16 → 32 …）｜普通 → 降一级（提醒减半）
+  //   失败 → 打回 0 级（明天再来）；等级越高说明记得越牢，最高几级等于「不用再管」
   let schedule = null;
   const datedRecords = done.filter((c) => c.date).sort(byDate);
   if (datedRecords.length) {
@@ -316,6 +321,8 @@ export function parseNote(absPath, rootDir, kind = 'mistakes') {
   const typeRaw = fm.data.type || profile.type || '';
 
   const checkins = parseCheckins(get('打卡记录'));
+  // 还没勾的打卡位置有几行（程序会在写回时自动续，Obsidian 里手勾完了可以一键续上）
+  const emptyCheckins = checkins.filter((c) => !c.done).length;
 
   // 首次错因（录入这道题时写下的原因）+ 历次做错的错因汇总
   const reasonText = get('错因分析', '错因');
@@ -361,6 +368,7 @@ export function parseNote(absPath, rootDir, kind = 'mistakes') {
     solution: solutionCallouts.filter((c) => c.kind !== 'warning').map((c) => c.body).join('\n\n').trim(),
     pitfalls: solutionCallouts.filter((c) => c.kind === 'warning').map((c) => c.body).join('\n\n').trim(),
     checkins,
+    emptyCheckins,
     warnings,
   };
   note.stats = summarize(checkins);

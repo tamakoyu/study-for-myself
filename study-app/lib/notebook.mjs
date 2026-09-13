@@ -318,9 +318,9 @@ function renderMarkdownReport(snap) {
   L.push(`| 指标 | 数值 |`);
   L.push(`| --- | --- |`);
   L.push(`| 题目总数 | ${t.total} |`);
-  L.push(`| ✅ 复习完成 | ${t.done}（${t.completionRate}%） |`);
-  L.push(`| ⏳ 待复习·做过 | ${t.started} |`);
-  L.push(`| ⏳ 待复习·未做 | ${t.untouched} |`);
+  L.push(`| ✅ 已复习 | ${t.done}（${t.completionRate}%） |`);
+  L.push(`| ⏳ 待复习·到日子了 | ${t.due} |`);
+  L.push(`| ⏳ 待复习·一次没做 | ${t.untouched} |`);
   L.push(`| 累计打卡 | ${t.checkins} 次（完美 ${t.byResult['完美']} / 普通 ${t.byResult['普通']} / 失败 ${t.byResult['失败']}） |`);
   L.push(`| 连续打卡 | ${t.streak} 天 |`);
   L.push('');
