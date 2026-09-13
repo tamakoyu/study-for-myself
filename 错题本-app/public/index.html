@@ -13,7 +13,16 @@
       <div class="brand">
         <span class="brand-mark">📕</span>
         <span class="brand-text">错题本</span>
-        <span class="brand-sub" id="brandSub">加载中…</span>
+      </div>
+
+      <div class="scope-picker" id="scopePicker">
+        <button class="scope-btn" id="scopeBtn" aria-haspopup="true" aria-expanded="false" title="切换要看的错题本范围">
+          <span class="scope-icon" id="scopeIcon">🎲</span>
+          <span class="scope-text" id="scopeText">全部错题</span>
+          <span class="scope-cnt" id="scopeCnt"></span>
+          <span class="caret">▾</span>
+        </button>
+        <div class="scope-menu" id="scopeMenu" hidden></div>
       </div>
 
       <nav class="tabs" id="tabs">

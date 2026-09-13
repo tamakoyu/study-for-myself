@@ -135,11 +135,22 @@ check(
   subs.join(' / ')
 );
 check('数学总览：面包屑正确', (await s.js(`return document.querySelector('.crumb')?.textContent.trim()||'';`)).includes('数学'));
-const catChips = await s.js(
-  `return [...document.querySelectorAll('[data-scope="category"]')].map(x=>x.dataset.value);`
+const btnText = await s.js(
+  `return document.querySelector('#scopeText').textContent.trim()+' / '+document.querySelector('#scopeCnt').textContent.trim();`
 );
-check('范围条：大类筹码存在', catChips.includes('数学') && catChips.includes('408'), catChips.join(' '));
+check('范围选择器：按钮显示当前范围', btnText.includes('数学'), btnText);
+await s.click('#scopeBtn');
+await s.waitFor('.scope-menu:not([hidden])');
+const menuRows = await s.js(
+  `return [...document.querySelectorAll('.scope-menu .sm-row')].map(x=>x.querySelector('.sm-name').textContent.trim());`
+);
+check(
+  '范围选择器：下拉里列出大类与科目',
+  menuRows.includes('全部错题') && menuRows.includes('数学') && menuRows.includes('408') && menuRows.includes('高数'),
+  menuRows.join(' / ')
+);
 await s.shot('02-math');
+await s.click('#scopeBtn');
 
 /* ---------- 3. 进入高数 → 完整总览 ---------- */
 await s.js(
@@ -149,15 +160,26 @@ await sleep(1000);
 await s.waitFor('.stat-grid');
 const statCount = await s.js(`return document.querySelectorAll('.stat-card').length;`);
 check('高数总览：5 张统计卡', statCount === 5, `${statCount} 张`);
-const chapterChips = await s.js(`return [...document.querySelectorAll('[data-scope="chapter"]')].map(x=>x.dataset.value);`);
-check('范围条：出现章节层', chapterChips.includes('极限') && chapterChips.includes('函数'), chapterChips.join(' '));
+await s.click('#scopeBtn');
+await s.waitFor('.scope-menu:not([hidden])');
+const chRows = await s.js(
+  `return [...document.querySelectorAll('.scope-menu .sm-ch')].map(x=>x.querySelector('.sm-name').textContent.trim());`
+);
+check('范围选择器：选中科目后展开章节', chRows.includes('极限') && chRows.includes('函数'), chRows.join(' / '));
+await s.click('#scopeBtn');
 await s.shot('03-gaoshu');
 
 /* ---------- 4. 下钻到「极限」章节 ---------- */
-await s.js(`[...document.querySelectorAll('[data-scope="chapter"]')].find(x=>x.dataset.value==='极限').click();`);
+await s.click('#scopeBtn');
+await s.waitFor('.scope-menu:not([hidden])');
+await s.js(
+  `[...document.querySelectorAll('.scope-menu .sm-ch')].find(x=>x.querySelector('.sm-name').textContent.trim()==='极限').click();`
+);
 await sleep(1000);
 const limTotal = await s.js(`return document.querySelector('.stat-card .stat-value')?.textContent.trim();`);
 check('章节下钻：极限 8 题', limTotal === '8', `${limTotal} 题`);
+const btnPath = await s.js(`return document.querySelector('#scopeText').textContent.trim();`);
+check('范围选择器：按钮更新为三级路径', btnPath === '数学 › 高数 › 极限', btnPath);
 
 /* ---------- 5. 题库跟随范围 ---------- */
 await s.js(`document.querySelector('.tab[data-view="library"]').click();`);

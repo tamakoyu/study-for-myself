@@ -11,6 +11,7 @@ const state = {
   q: '',
   filters: { status: null, difficulty: null, heat: null },
   openId: null,
+  pickerOpen: false,
   review: {
     phase: 'setup', // setup | run | done
     options: { chapters: [], scope: 'pending', order: 'priority', count: 10 },
@@ -112,36 +113,113 @@ function chip(active, label, count, attrs) {
   }</button>`;
 }
 
-function renderScopeBar() {
+const CAT_ICON = { 数学: '📐', 408: '💻' };
+const catIcon = (name) => CAT_ICON[name] || '📚';
+
+/** 顶栏那个「当前在看哪本错题本」的按钮 */
+function renderScopeButton() {
+  if (!state.data) return;
   const { tree } = state.data;
-  const totalAll = tree.reduce((s, c) => s + c.total, 0);
+  const { cat, sub, ch } = scopeNode();
+  const total = tree.reduce((s, c) => s + c.total, 0);
+
+  const path = [cat?.name, sub?.name, ch?.name].filter(Boolean);
+  const label = path.length ? path.join(' › ') : '全部错题';
+  const count = ch ? ch.total : sub ? sub.total : cat ? cat.total : total;
+
+  $('#scopeIcon').textContent = cat ? catIcon(cat.name) : '🎲';
+  $('#scopeText').textContent = label;
+  $('#scopeCnt').textContent = `${count} 题`;
+  $('#scopeBtn').classList.toggle('is-scoped', path.length > 0);
+  $('#scopeBtn').title = path.length ? `当前范围：${label}　共 ${count} 题` : `全部错题　共 ${total} 题`;
+}
+
+/** 下拉里的一行 */
+function scopeRow({ active = false, indent = 0, icon = '', name, count = 0, attrs = '', kind = 'row', arrow = '' }) {
+  return `<button class="sm-row sm-${kind} ${active ? 'is-on' : ''}" style="--indent:${indent}" ${attrs}>
+    ${icon ? `<span class="sm-icon">${icon}</span>` : '<span class="sm-icon"></span>'}
+    <span class="sm-name">${esc(name)}</span>
+    ${arrow ? `<span class="sm-arrow">${arrow}</span>` : ''}
+    <span class="sm-count">${count}</span>
+  </button>`;
+}
+
+/**
+ * 下拉面板：大类 → 科目 →（只展开当前科目的）章节。
+ * 没选中的大类只列科目名，保持紧凑；选中的才展开章节。
+ */
+function renderScopeMenu() {
+  const { tree } = state.data;
   const { cat, sub } = scopeNode();
+  const total = tree.reduce((s, c) => s + c.total, 0);
 
-  const catRow = [
-    chip(!state.scope.category, '全部', totalAll, 'data-scope="category" data-value=""'),
-    ...tree.map((c) => chip(state.scope.category === c.name, c.name, c.total, `data-scope="category" data-value="${esc(c.name)}"`)),
-  ].join('');
+  const parts = [
+    scopeRow({ active: !cat, icon: '🎲', name: '全部错题', count: total, kind: 'all', attrs: 'data-pick="reset"' }),
+    '<div class="sm-divider"></div>',
+  ];
 
-  const subRow = cat
-    ? cat.children
-        .map((s) => chip(state.scope.subject === s.name, s.name, s.total, `data-scope="subject" data-value="${esc(s.name)}"`))
-        .join('')
-    : '';
+  for (const c of tree) {
+    if (!tree.length) break;
+    parts.push(
+      scopeRow({
+        active: !!cat && cat.name === c.name && !sub,
+        icon: catIcon(c.name),
+        name: c.name,
+        count: c.total,
+        kind: 'cat',
+        attrs: `data-pick="category" data-value="${esc(c.name)}"`,
+      })
+    );
 
-  const chRow = sub
-    ? [
-        chip(!state.scope.chapter, '全部章节', sub.total, 'data-scope="chapter" data-value=""'),
-        ...sub.children.map((c) => chip(state.scope.chapter === c.name, c.name, c.total, `data-scope="chapter" data-value="${esc(c.name)}"`)),
-      ].join('')
-    : '';
+    const catOpen = !!cat && cat.name === c.name;
+    for (const s0 of c.children) {
+      const subOpen = catOpen && !!sub && sub.name === s0.name;
+      parts.push(
+        scopeRow({
+          active: subOpen && !state.scope.chapter,
+          indent: 1,
+          name: s0.name,
+          count: s0.total,
+          kind: 'sub',
+          arrow: catOpen && s0.children.length ? (subOpen ? '▾' : '▸') : '',
+          attrs: `data-pick="subject" data-category="${esc(c.name)}" data-value="${esc(s0.name)}"`,
+        })
+      );
+      if (!subOpen) continue;
+      for (const chNode of s0.children) {
+        parts.push(
+          scopeRow({
+            active: state.scope.chapter === chNode.name,
+            indent: 2,
+            name: chNode.name,
+            count: chNode.total,
+            kind: 'ch',
+            attrs: `data-pick="chapter" data-value="${esc(chNode.name)}"`,
+          })
+        );
+      }
+    }
+  }
+  return parts.join('');
+}
 
-  if (!cat && !tree.length) return '';
+function openPicker() {
+  if (!state.data) return;
+  state.pickerOpen = true;
+  const menu = $('#scopeMenu');
+  menu.innerHTML = renderScopeMenu();
+  menu.hidden = false;
+  $('#scopeBtn').setAttribute('aria-expanded', 'true');
+}
 
-  return `<div class="scopebar" id="scopeBar">
-    <div class="scope-row"><span class="scope-label">大类</span>${catRow}</div>
-    ${subRow ? `<div class="scope-row"><span class="scope-label">科目</span>${subRow}</div>` : ''}
-    ${chRow ? `<div class="scope-row"><span class="scope-label">章节</span>${chRow}</div>` : ''}
-  </div>`;
+function closePicker() {
+  state.pickerOpen = false;
+  $('#scopeMenu').hidden = true;
+  $('#scopeBtn').setAttribute('aria-expanded', 'false');
+}
+
+function togglePicker() {
+  state.pickerOpen ? closePicker() : openPicker();
 }
 
 /* ============================================================
@@ -1149,7 +1227,6 @@ async function addPrompt() {
 function render() {
   if (!state.data || !state.stats) return;
   const main = $('#main');
-  const bar = renderScopeBar();
 
   let body;
   if (state.view === 'dashboard') body = renderDashboard();
@@ -1157,12 +1234,14 @@ function render() {
   else if (state.view === 'review') body = renderReview();
   else body = renderAdd();
 
-  // 复习答题中不显示范围条，避免误触
-  const showBar = !(state.view === 'review' && state.review.phase === 'run');
+  main.innerHTML = body;
 
-  main.innerHTML = (showBar ? bar : '') + body;
+  renderScopeButton();
+  // 顶栏范围选择器在总览/题库/复习三个页面才有意义
+  $('#scopePicker').hidden = state.view === 'add';
+  // 面板开着的时候（比如打卡后数据刷新）跟着更新
+  if (state.pickerOpen) $('#scopeMenu').innerHTML = renderScopeMenu();
 
-  $('#brandSub').textContent = `${state.data.problems.length} 题 · ${state.data.tree.length} 个大类`;
   for (const btn of document.querySelectorAll('.tab')) {
     btn.classList.toggle('is-active', btn.dataset.view === state.view);
   }
@@ -1260,6 +1339,27 @@ function bindEvents() {
   });
 
   window.addEventListener('hashchange', applyHash);
+
+  // 顶栏范围选择器
+  $('#scopeBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    togglePicker();
+  });
+  $('#scopeMenu').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-pick]');
+    if (!row) return;
+    e.stopPropagation();
+    const kind = row.dataset.pick;
+    closePicker();
+    if (kind === 'reset') return go({ category: null, subject: null, chapter: null });
+    if (kind === 'category') return go({ category: row.dataset.value, subject: null, chapter: null });
+    if (kind === 'subject')
+      return go({ category: row.dataset.category, subject: row.dataset.value, chapter: null });
+    if (kind === 'chapter') return go({ chapter: row.dataset.value });
+  });
+  document.addEventListener('click', (e) => {
+    if (state.pickerOpen && !e.target.closest('#scopePicker')) closePicker();
+  });
 
   $('#search').addEventListener('input', (e) => {
     state.q = e.target.value;
@@ -1384,6 +1484,7 @@ function bindEvents() {
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.pickerOpen) return closePicker();
     if (e.key === 'Escape' && !$('#drawer').hidden) return closeDrawer();
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
     if (state.view === 'review' && state.review.phase === 'run' && !typing) {
