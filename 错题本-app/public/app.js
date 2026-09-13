@@ -12,6 +12,8 @@ const state = {
   filters: { status: null, difficulty: null, heat: null, point: null },
   openId: null,
   pickerOpen: false,
+  solve: { id: null, revealed: false, startedAt: 0, timerId: null, pendingResult: null },
+  uploads: [],
   drawerOpenedAt: 0,
   drawerTimerId: null,
   review: {
@@ -24,11 +26,15 @@ const state = {
     startedAt: 0,
     questionAt: 0,
     timerId: null,
+    pendingResult: null,
   },
-  add: { raw: '', mode: 'rule', items: null, busy: false },
+  add: { raw: '', mode: 'rule', items: null, busy: false, uploads: [] },
 };
 
-const VIEWS = ['dashboard', 'library', 'review', 'add'];
+const VIEWS = ['dashboard', 'library', 'review', 'add', 'solve'];
+
+/** 错因词表（与后端 taxonomy.mjs 保持一致） */
+const REASONS = ['概念不清', '方法不会', '思路方向错', '计算失误', '审题错误', '公式记错', '粗心大意', '时间不够'];
 
 const PALETTE = ['#6d8cff', '#3fb950', '#e3b341', '#f85149', '#a371f7', '#39c5cf', '#ff8c42'];
 
@@ -488,6 +494,28 @@ function insightPanels(stats) {
       </table></div></section>`);
   }
 
+  const rs = stats.byReason;
+  if (rs && rs.rows.length) {
+    parts.push(`<section class="panel" style="margin-top:14px">
+      <div class="panel-head"><h3>🧠 错因分布</h3><span class="hint">你到底是怎么错的 —— 计算失误要练手感，概念不清得回课本${
+        rs.noFirstReason ? `　·　还有 ${rs.noFirstReason} 题没写首次错因` : ''
+      }</span></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>错因</th><th>合计</th><th>录入时</th><th>后续做错</th></tr></thead>
+        <tbody>${rs.rows
+          .slice(0, 12)
+          .map(
+            (r) => `<tr>
+          <td><span class="reason-tag">${esc(r.key)}</span></td>
+          <td class="num-cell">${r.total}</td>
+          <td class="num-cell">${r.first}</td>
+          <td class="num-cell">${r.later}</td>
+        </tr>`
+          )
+          .join('')}</tbody>
+      </table></div></section>`);
+  }
+
   const t = stats.timing;
   if (t && t.slow && t.slow.length) {
     parts.push(`<section class="panel" style="margin-top:14px">
@@ -797,21 +825,30 @@ function renderDrawer(id) {
         .join('')}</datalist>
     </section>
 
-    <section class="checkin-panel">
-      <h4>📌 打卡　<span style="font-weight:400;color:var(--text-3)">做完一次，点一个结果</span>
-        <span class="live-timer" id="liveTimer">本次用时 0:00</span></h4>
-      <div class="checkin-actions">
-        ${RESULTS.map(
-          (r) => `<button class="checkin-btn ${r.cls}" data-checkin="${r.key}" data-id="${esc(p.id)}">
-              <span>${r.icon} ${r.key}</span><small>${r.hint}</small></button>`
-        ).join('')}
-      </div>
-      <div style="margin-top:14px;color:var(--text-3);font-size:12.5px">
-        目前：完美 <b style="color:var(--done)">${p.stats.perfect}</b> ·
-        普通 <b style="color:var(--warn)">${p.stats.normal}</b> ·
-        失败 <b style="color:var(--fail)">${p.stats.fail}</b>（勾到「完美」即进入遗忘曲线）
+    <section class="do-panel">
+      <button class="btn-primary big" data-solve-start="${esc(p.id)}">▶ 开始做题（全屏）</button>
+      <div class="do-hint">进全屏做题模式：解析和错因都会藏起来，做完在那边打卡。</div>
+      <div class="do-stats">
+        <span>已练 <b>${p.stats.total}</b> 次</span>
+        <span>完美 <b style="color:var(--done)">${p.stats.perfect}</b></span>
+        <span>普通 <b style="color:var(--warn)">${p.stats.normal}</b></span>
+        <span>失败 <b style="color:var(--fail)">${p.stats.fail}</b></span>
+        ${p.stats.avgSec != null ? `<span>平均用时 <b>${fmtSec(p.stats.avgSec)}</b></span>` : ''}
       </div>
       ${timeline}
+    </section>
+
+    <section class="points-panel">
+      <h4>🧠 错因分析　<span class="hint">做错的原因，攒起来才看得出你的固定错法</span></h4>
+      <div class="reason-edit">
+        <span class="rp-label">首次错因</span>
+        <select class="reason-select" data-reason-select="${esc(p.id)}">
+          <option value=""${p.firstReason ? '' : ' selected'}>（未记录）</option>
+          ${REASONS.map((r) => `<option${p.firstReason === r ? ' selected' : ''}>${esc(r)}</option>`).join('')}
+          ${p.firstReason && !REASONS.includes(p.firstReason) ? `<option selected>${esc(p.firstReason)}</option>` : ''}
+        </select>
+      </div>
+      ${reasonReportHtml(p)}
     </section>
 
     <div class="stem-box">${mdToHtml(p.stem)}</div>
@@ -841,8 +878,6 @@ function openDrawer(id) {
   drawer.hidden = false;
   drawer.setAttribute('aria-hidden', 'false');
   state.openId = id;
-  state.drawerOpenedAt = Date.now();
-  startDrawerTimer();
   document.body.style.overflow = 'hidden';
 }
 
@@ -867,7 +902,6 @@ function closeDrawer() {
   drawer.hidden = true;
   drawer.setAttribute('aria-hidden', 'true');
   state.openId = null;
-  stopDrawerTimer();
   document.body.style.overflow = '';
 }
 
@@ -1057,15 +1091,17 @@ function renderReviewSession() {
         <p class="rv-tip">先在草稿纸上自己做一遍，再对答案——直接看等于没做。</p>
       </div>`;
 
-  const actions = r.revealed
-    ? `<div class="rv-record">
+  const actions = r.pendingResult
+    ? reasonPickerHtml(r.pendingResult)
+    : r.revealed
+      ? `<div class="rv-record">
         <span class="rv-record-label">这次做得怎么样？</span>
         ${RESULTS.map(
           (res, i) => `<button class="checkin-btn ${res.cls}" data-review="record" data-result="${res.key}">
               <span>${res.icon} ${res.key}　<span class="kbd">${i + 1}</span></span><small>${res.hint}</small></button>`
         ).join('')}
       </div>`
-    : `<div class="rv-record">
+      : `<div class="rv-record">
         <button class="checkin-btn r-skip" data-review="skip"><span>跳过这题　<span class="kbd">S</span></span><small>不计入打卡</small></button>
       </div>`;
 
@@ -1170,6 +1206,7 @@ function startReview() {
   r.index = 0;
   r.revealed = false;
   r.results = [];
+  r.pendingResult = null;
   r.startedAt = Date.now();
   r.questionAt = Date.now();
   render();
@@ -1183,23 +1220,34 @@ function revealReview() {
   render();
 }
 
-async function recordReview(result) {
+/** 点结果：完美直接记；普通/失败先问错因 */
+function requestReviewRecord(result) {
   const r = state.review;
   if (r.phase !== 'run' || !r.revealed) return;
+  if (result === '完美') return commitReview(result, null);
+  r.pendingResult = result;
+  render();
+}
+
+async function commitReview(result, reason) {
+  const r = state.review;
   const p = currentReviewProblem();
   if (!p) return;
   const ms = Date.now() - r.questionAt;
+  r.pendingResult = null;
   r.results.push({
     id: p.id, num: p.num, subject: p.subject, chapter: p.chapter,
-    difficulty: p.difficulty, heat: p.heat, result, ms,
+    difficulty: p.difficulty, heat: p.heat, result, reason, ms,
   });
   advanceReview();
   try {
     await api('/api/checkin', {
       method: 'POST',
-      body: JSON.stringify({ id: p.id, result, seconds: Math.max(1, Math.round(ms / 1000)) }),
+      body: JSON.stringify({
+        id: p.id, result, seconds: Math.max(1, Math.round(ms / 1000)), reason: reason || null,
+      }),
     });
-    toast(`${p.num} → ${result}（${fmtSec(ms / 1000)}）`, result === '完美' ? 'ok' : '');
+    toast(`${p.num} → ${result}${reason ? `（${reason}）` : ''}（${fmtSec(ms / 1000)}）`, result === '完美' ? 'ok' : '');
   } catch (err) {
     toast(`${p.num} 打卡写入失败：${err.message}`, 'err');
   }
@@ -1222,6 +1270,7 @@ function advanceReview() {
   const r = state.review;
   r.index += 1;
   r.revealed = false;
+  r.pendingResult = null;
   r.questionAt = Date.now();
   if (r.index >= r.queue.length) {
     stopReviewTimer();
@@ -1242,6 +1291,160 @@ function exitReview() {
   state.review.revealed = false;
   render();
   reload({ silent: true });
+}
+
+/* ============================================================
+   做题模式（全窗口，单题）
+   ============================================================ */
+function enterSolve(id) {
+  state.solve = { id, revealed: false, startedAt: Date.now(), timerId: null, pendingResult: null };
+  if (!state.data?.problems.some((x) => x.id === id)) toast('找不到这道题', 'err');
+}
+
+function closeSolve() {
+  stopSolveTimer();
+  state.solve.id = null;
+  state.solve.revealed = false;
+  state.solve.pendingResult = null;
+}
+
+function startSolveTimer() {
+  stopSolveTimer();
+  if (state.view !== 'solve' || !state.solve.id) return;
+  state.solve.timerId = setInterval(() => {
+    const el = document.getElementById('solveTimer');
+    if (!el) return stopSolveTimer();
+    el.textContent = `用时 ${mmss(Date.now() - state.solve.startedAt)}`;
+  }, 500);
+}
+function stopSolveTimer() {
+  if (state.solve.timerId) {
+    clearInterval(state.solve.timerId);
+    state.solve.timerId = null;
+  }
+}
+
+/** 做错时问一句「哪儿出的问题」——攒起来才看得出你的错法 */
+function reasonPickerHtml(result) {
+  return `<div class="reason-picker">
+    <div class="rp-title">这次是「${esc(result)}」——问题出在哪？<span class="hint">记下来才能看出你的错法</span></div>
+    <div class="rp-chips">
+      ${REASONS.map((r) => `<button class="chip" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}
+    </div>
+    <div class="rp-foot">
+      <button class="link-btn" data-reason="">不记错因，直接保存</button>
+      <button class="link-btn" data-reason-cancel="1">取消</button>
+    </div>
+  </div>`;
+}
+
+/** 做题时错因和解析一起藏着 */
+function reasonReportHtml(p) {
+  const rows = p.reasons || [];
+  if (!rows.length) return '<p class="md-p" style="color:var(--text-3)">还没有记录过错因。</p>';
+  const counts = Object.entries(p.reasonCounts || {}).sort((a, b) => b[1] - a[1]);
+  return `<p class="md-p"><b>首次错因</b>　${
+    p.firstReason ? esc(p.firstReason) : '<span style="color:var(--text-3)">未记录</span>'
+  }</p>
+    <p class="md-p"><b>错因分布</b>　${counts.map(([k, v]) => `${esc(k)} ×${v}`).join('　·　')}</p>
+    <ul class="md-list">${rows
+      .map(
+        (r) =>
+          `<li>${r.first ? '录入这道题时' : `第 ${r.attempt} 次练习`}　<b>${esc(r.reason)}</b>${
+            r.date ? `　<span style="color:var(--text-3)">${esc(r.date)}</span>` : ''
+          }</li>`
+      )
+      .join('')}</ul>`;
+}
+
+function renderSolve() {
+  const p = state.data.problems.find((x) => x.id === state.solve.id);
+  if (!p) {
+    return `<div class="panel"><div class="panel-body empty-row">找不到这道题　<button class="link-btn" data-solve="exit">回到题库</button></div></div>`;
+  }
+  const meta = statusMeta(p.stats.status);
+  const s = state.solve;
+
+  const revealed = s.revealed
+    ? `<div class="rv-revealed">
+        ${foldBlock('fold-answer', '✅', '答案', '', mdToHtml(p.answer), true)}
+        ${foldBlock('fold-solution', '📝', '解析', '', mdToHtml(p.solution))}
+        ${foldBlock('fold-keypoints', '🔎', '核心考点与主要难点', '', mdToHtml(p.keypoints))}
+        ${p.pitfalls ? foldBlock('fold-pitfalls', '⚠️', '易错提醒', '', mdToHtml(p.pitfalls)) : ''}
+        ${foldBlock('fold-reason', '🧠', '错因分析', '', reasonReportHtml(p))}
+      </div>`
+    : `<div class="rv-hidden">
+        <button class="rv-reveal" data-solve="reveal">👁 显示答案与解析　<span class="kbd">空格</span></button>
+        <p class="rv-tip">解析和错因都藏着 —— 先自己在纸上做一遍。</p>
+      </div>`;
+
+  const actions = s.pendingResult
+    ? reasonPickerHtml(s.pendingResult)
+    : s.revealed
+      ? `<div class="rv-record">
+          <span class="rv-record-label">这次做得怎么样？</span>
+          ${RESULTS.map(
+            (res, i) => `<button class="checkin-btn ${res.cls}" data-solve="record" data-result="${res.key}">
+              <span>${res.icon} ${res.key}　<span class="kbd">${i + 1}</span></span><small>${res.hint}</small></button>`
+          ).join('')}
+        </div>`
+      : '';
+
+  return `<div class="review">
+    <div class="rv-bar">
+      <button class="rv-exit" data-solve="exit">← 退出做题</button>
+      <span class="rv-where">${esc(p.category)} · ${esc(p.subject)} · ${esc(p.chapter)}</span>
+      <span class="rv-timer" id="solveTimer">用时 0:00</span>
+    </div>
+    <article class="rv-card">
+      <div class="rv-head">
+        <span class="rv-num">${esc(p.num)}</span>
+        <span class="badge badge-type">${esc(p.type)}</span>
+        ${stars(p.difficulty)}${fires(p.heat)}
+        <span class="badge ${meta.cls}">${meta.text}</span>
+      </div>
+      ${
+        (p.points || []).length
+          ? `<div class="rv-points">${(p.points || []).map((x) => `<span class="point-chip static">${esc(x)}</span>`).join('')}</div>`
+          : ''
+      }
+      <div class="rv-stem">${mdToHtml(p.stem)}</div>
+      ${revealed}
+    </article>
+    ${actions}
+    <div class="solve-foot">
+      <span>已练 ${p.stats.total} 次${p.stats.last ? ` · 上次 ${esc(p.stats.last.result)}` : ''}</span>
+      ${p.stats.schedule ? `<span>遗忘曲线：${esc(scheduleText(p))}</span>` : ''}
+      ${p.stats.avgSec != null ? `<span>平均用时 ${fmtSec(p.stats.avgSec)}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+async function doSolveCheckin(result, reason) {
+  const p = state.data.problems.find((x) => x.id === state.solve.id);
+  if (!p) return;
+  const seconds = Math.round((Date.now() - state.solve.startedAt) / 1000);
+  state.solve.pendingResult = null;
+  try {
+    await api('/api/checkin', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: p.id,
+        result,
+        seconds: Math.max(1, seconds),
+        reason: reason || null,
+      }),
+    });
+    state.solve.startedAt = Date.now();
+    await reload({ silent: true });
+    startSolveTimer();
+    toast(
+      `${p.num} → ${result}${reason ? `（${reason}）` : ''} · ${fmtSec(Math.max(1, seconds))}`,
+      result === '完美' ? 'ok' : ''
+    );
+  } catch (err) {
+    toast(`打卡失败：${err.message}`, 'err');
+  }
 }
 
 /* ============================================================
@@ -1270,6 +1473,7 @@ function renderAdd() {
           <label>题型 <input data-field="type" value="${esc(it.type)}"></label>
           <label>难度 <select data-field="difficulty">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${'⭐'.repeat(n)}</option>`).join('')}</select></label>
           <label>热度 <select data-field="heat">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${'🔥'.repeat(n)}</option>`).join('')}</select></label>
+          <label>错因 <select data-field="reason">${['', ...REASONS].map((r) => `<option value="${esc(r)}">${r ? esc(r) : '（待补充）'}</option>`).join('')}</select></label>
         </div>
         <pre class="ai-stem">${esc(it.stem.slice(0, 400))}${it.stem.length > 400 ? '\n…' : ''}</pre>
       </article>`
@@ -1302,6 +1506,42 @@ function renderAdd() {
       </div>
     </section>
 
+    <section class="panel">
+      <div class="panel-head">
+        <h3>② 或者上传题目图片</h3>
+        <span class="hint">图片只做暂存 —— 我会看懂内容后用文字重写题目、用代码重画图，不会把原图贴进笔记</span>
+      </div>
+      <div class="panel-body">
+        <div class="drop-zone" id="dropZone">
+          <input type="file" id="fileInput" accept="image/*" multiple hidden />
+          <div class="dz-icon">🖼️</div>
+          <div class="dz-text">把题目截图拖到这里，或 <button class="link-btn" data-add="pick">选择文件</button></div>
+          <div class="dz-hint">PNG / JPG / WebP，单张最大 15MB，可一次多张</div>
+        </div>
+        ${
+          a.uploads && a.uploads.length
+            ? `<div class="upload-list">${a.uploads
+                .map(
+                  (f) => `<figure class="upload-item">
+              <img src="/uploads/${encodeURIComponent(f.name)}" alt="" loading="lazy" />
+              <figcaption>${esc(f.name)}<br><span>${(f.bytes / 1024).toFixed(0)} KB</span></figcaption>
+              <button class="up-del" data-add="del-upload" data-name="${esc(f.name)}" title="删掉">×</button>
+            </figure>`
+                )
+                .join('')}</div>`
+            : ''
+        }
+        <div class="add-controls">
+          <label class="inline-field">这批题的错因
+            <select id="imageReason">${['', ...REASONS].map((r) => `<option value="${esc(r)}">${r ? esc(r) : '（待补充，你问我）'}</option>`).join('')}</select>
+          </label>
+          <button class="btn-primary small" data-add="prompt-images" ${a.uploads && a.uploads.length ? '' : 'disabled'}>📋 生成提示词（发给我转成题目）</button>
+          <button class="btn-ghost small" data-add="clear-uploads" ${a.uploads && a.uploads.length ? '' : 'disabled'}>清空暂存</button>
+        </div>
+        <div class="rv-hint">生成的提示词里会带上图片路径、错因和完整格式规范。把提示词发给我，我读完图就把题目写进错题本（图我会重画，不用你的原图）。</div>
+      </div>
+    </section>
+
     ${preview}
 
     <div class="rv-start-row">
@@ -1327,6 +1567,7 @@ function collectAddItems() {
       type: get('type'),
       difficulty: Number(get('difficulty')) || 3,
       heat: Number(get('heat')) || 3,
+      reason: get('reason'),
       stem: state.add.items[Number(node.dataset.index)]?.stem || '',
     };
   });
@@ -1364,6 +1605,95 @@ async function addCreate() {
   }
 }
 
+/** 复制到剪贴板，失败时回退到 execCommand */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  }
+}
+
+async function loadUploads() {
+  try {
+    const r = await api('/api/uploads');
+    state.add.uploads = r.files || [];
+  } catch {
+    state.add.uploads = [];
+  }
+}
+
+async function uploadFiles(fileList) {
+  const files = [...fileList].filter((f) => f.type.startsWith('image/'));
+  if (!files.length) return toast('只支持图片文件', 'err');
+  let ok = 0;
+  for (const f of files) {
+    if (f.size > 15 * 1024 * 1024) {
+      toast(`${f.name} 超过 15MB，已跳过`, 'err');
+      continue;
+    }
+    const dataUrl = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = rej;
+      r.readAsDataURL(f);
+    });
+    try {
+      await api('/api/upload', { method: 'POST', body: JSON.stringify({ name: f.name, dataUrl }) });
+      ok += 1;
+    } catch (e) {
+      toast(`上传失败 ${f.name}：${e.message}`, 'err');
+    }
+  }
+  await loadUploads();
+  render();
+  if (ok) toast(`已上传 ${ok} 张，点「生成提示词」发给我`);
+}
+
+async function deleteUpload(name) {
+  try {
+    await api('/api/uploads', { method: 'DELETE', body: JSON.stringify({ names: [name] }) });
+    await loadUploads();
+    render();
+  } catch (e) {
+    toast(`删除失败：${e.message}`, 'err');
+  }
+}
+
+async function clearUploads() {
+  try {
+    const r = await api('/api/uploads', { method: 'DELETE', body: JSON.stringify({}) });
+    await loadUploads();
+    render();
+    toast(`已清空 ${r.removed} 张暂存图片`);
+  } catch (e) {
+    toast(`清空失败：${e.message}`, 'err');
+  }
+}
+
+async function promptImages() {
+  if (!state.add.uploads.length) return toast('先上传图片', 'err');
+  const reason = document.getElementById('imageReason')?.value || '';
+  try {
+    const out = await api('/api/prompt-images', {
+      method: 'POST',
+      body: JSON.stringify({ names: state.add.uploads.map((f) => f.name), reason }),
+    });
+    await copyText(out.prompt);
+    toast('提示词已复制 —— 粘给我，我读完图就把题目写进去', 'ok');
+  } catch (e) {
+    toast(`生成提示词失败：${e.message}`, 'err');
+  }
+}
+
 async function addPrompt() {
   const items = collectAddItems();
   if (!items.length) return;
@@ -1372,26 +1702,10 @@ async function addPrompt() {
       method: 'POST',
       body: JSON.stringify({ stems: items.map((i) => i.stem), category: items[0].category, subject: items[0].subject, chapter: items[0].chapter }),
     });
-    await navigator.clipboard.writeText(out.prompt);
+    await copyText(out.prompt);
     toast('提示词已复制，去对话里发给我即可', 'ok');
   } catch (err) {
-    // 复制失败就退化成把提示词放进预览区
-    try {
-      const out = await api('/api/prompt', {
-        method: 'POST',
-        body: JSON.stringify({ stems: items.map((i) => i.stem) }),
-      });
-      const box = document.createElement('textarea');
-      box.value = out.prompt;
-      box.style.cssText = 'position:fixed;left:-9999px';
-      document.body.appendChild(box);
-      box.select();
-      document.execCommand('copy');
-      box.remove();
-      toast('提示词已复制（回退方式）', 'ok');
-    } catch (e2) {
-      toast(`生成提示词失败：${e2.message}`, 'err');
-    }
+    toast(`生成提示词失败：${err.message}`, 'err');
   }
 }
 
@@ -1406,13 +1720,15 @@ function render() {
   if (state.view === 'dashboard') body = renderDashboard();
   else if (state.view === 'library') body = renderLibrary();
   else if (state.view === 'review') body = renderReview();
+  else if (state.view === 'solve') body = renderSolve();
   else body = renderAdd();
 
   main.innerHTML = body;
 
   renderScopeButton();
-  // 顶栏范围选择器在总览/题库/复习三个页面才有意义
-  $('#scopePicker').hidden = state.view === 'add';
+  // 顶栏范围选择器只在总览/题库/复习有用；做题时全屏专心做
+  $('#scopePicker').hidden = state.view === 'add' || state.view === 'solve';
+  document.body.classList.toggle('is-solving', state.view === 'solve');
   // 面板开着的时候（比如打卡后数据刷新）跟着更新
   if (state.pickerOpen) $('#scopeMenu').innerHTML = renderScopeMenu();
 
@@ -1438,6 +1754,19 @@ function applyHash() {
     .filter(Boolean)
     .map(decodeURIComponent);
   const view = VIEWS.includes(parts[0]) ? parts[0] : 'dashboard';
+
+  // 做题模式： #solve/<题目 id>，不走范围
+  if (view === 'solve') {
+    const id = parts[1] || null;
+    state.view = 'solve';
+    if (id && state.solve.id !== id) enterSolve(id);
+    if (!id) closeSolve();
+    if (state.data) render();
+    startSolveTimer();
+    return;
+  }
+  closeSolve();
+
   state.view = view;
   state.scope = { category: parts[1] || null, subject: parts[2] || null, chapter: parts[3] || null };
   if (state.data) {
@@ -1446,6 +1775,8 @@ function applyHash() {
   }
   if (view === 'review' && state.review.phase === 'run') startReviewTimer();
   else if (view !== 'review') stopReviewTimer();
+
+  if (view === 'add' && !state.add.uploads.length) loadUploads().then(() => render());
 }
 
 function go(patch = {}) {
@@ -1535,6 +1866,35 @@ function bindEvents() {
     if (state.pickerOpen && !e.target.closest('#scopePicker')) closePicker();
   });
 
+  // 图片选择与拖拽
+  $('#main').addEventListener('change', (e) => {
+    if (e.target.id === 'fileInput' && e.target.files?.length) {
+      uploadFiles(e.target.files);
+      e.target.value = '';
+    }
+  });
+  const dz = (e) => {
+    const zone = e.target.closest?.('#dropZone') || document.getElementById('dropZone');
+    return zone;
+  };
+  $('#main').addEventListener('dragover', (e) => {
+    const zone = e.target.closest('#dropZone');
+    if (!zone) return;
+    e.preventDefault();
+    zone.classList.add('is-over');
+  });
+  $('#main').addEventListener('dragleave', (e) => {
+    const zone = e.target.closest('#dropZone');
+    if (zone) zone.classList.remove('is-over');
+  });
+  $('#main').addEventListener('drop', (e) => {
+    const zone = e.target.closest('#dropZone');
+    if (!zone) return;
+    e.preventDefault();
+    zone.classList.remove('is-over');
+    if (e.dataTransfer?.files?.length) uploadFiles(e.dataTransfer.files);
+  });
+
   $('#search').addEventListener('input', (e) => {
     state.q = e.target.value;
     if (state.q && state.view !== 'library') go({ view: 'library' });
@@ -1578,7 +1938,7 @@ function bindEvents() {
       const action = rv.dataset.review;
       if (action === 'start' || action === 'again') return startReview();
       if (action === 'reveal') return revealReview();
-      if (action === 'record') return recordReview(rv.dataset.result);
+      if (action === 'record') return requestReviewRecord(rv.dataset.result);
       if (action === 'skip') return skipReview();
       if (action === 'exit') return exitReview();
       if (action === 'back') return go({ view: 'dashboard' });
@@ -1590,8 +1950,12 @@ function bindEvents() {
       if (a === 'parse') return addParse();
       if (a === 'create') return addCreate();
       if (a === 'prompt') return addPrompt();
+      if (a === 'pick') return $('#fileInput')?.click();
+      if (a === 'del-upload') return deleteUpload(add.dataset.name);
+      if (a === 'clear-uploads') return clearUploads();
+      if (a === 'prompt-images') return promptImages();
       if (a === 'clear') {
-        state.add = { raw: '', mode: state.add.mode, items: null, busy: false };
+        state.add = { raw: '', mode: state.add.mode, items: null, busy: false, uploads: state.add.uploads };
         return render();
       }
     }
@@ -1621,6 +1985,41 @@ function bindEvents() {
       if (rvOpt.dataset.rvCount) o.count = rvOpt.dataset.rvCount === 'all' ? 'all' : Number(rvOpt.dataset.rvCount);
       return render();
     }
+
+    // 做题模式内的按钮
+    const sv = e.target.closest('[data-solve]');
+    if (sv) {
+      const a = sv.dataset.solve;
+      if (a === 'exit') return go({ view: 'library' });
+      if (a === 'reveal') {
+        state.solve.revealed = true;
+        return render();
+      }
+      if (a === 'record') {
+        const result = sv.dataset.result;
+        if (result === '完美') return doSolveCheckin('完美', null);
+        state.solve.pendingResult = result;
+        return render();
+      }
+    }
+
+    // 错因选择（做题模式和复习模式共用）
+    const reasonBtn = e.target.closest('[data-reason]');
+    if (reasonBtn) {
+      const reason = reasonBtn.dataset.reason || null;
+      if (state.solve.pendingResult) return doSolveCheckin(state.solve.pendingResult, reason);
+      if (state.review.pendingResult) return commitReview(state.review.pendingResult, reason);
+      return;
+    }
+    if (e.target.closest('[data-reason-cancel]')) {
+      state.solve.pendingResult = null;
+      state.review.pendingResult = null;
+      return render();
+    }
+
+    // 抽屉里的「开始做题」
+    const solveStart = e.target.closest('[data-solve-start]');
+    if (solveStart) return goSolve(solveStart.dataset.solveStart);
 
     const open = e.target.closest('[data-open]');
     if (open) return openDrawer(open.dataset.open);
@@ -1654,6 +2053,10 @@ function bindEvents() {
 
   $('#drawer').addEventListener('click', (e) => {
     if (e.target.closest('[data-close-drawer]')) return closeDrawer();
+    // 抽屉里的「开始做题」按钮在抽屉内部，需要在这里接
+    const start = e.target.closest('[data-solve-start]');
+    if (start) return goSolve(start.dataset.solveStart);
+
     const c = e.target.closest('[data-checkin]');
     if (c) return doCheckin(c.dataset.id, c.dataset.checkin, c);
     const u = e.target.closest('[data-undo]');
@@ -1674,6 +2077,12 @@ function bindEvents() {
     }
   });
 
+  // 首次错因下拉
+  $('#drawer').addEventListener('change', (e) => {
+    const sel = e.target.closest('[data-reason-select]');
+    if (sel) doSetReason(sel.dataset.reasonSelect, sel.value);
+  });
+
   // 考点输入框：回车添加
   $('#drawer').addEventListener('keydown', (e) => {
     if (e.target.id !== 'pointInput' || e.key !== 'Enter') return;
@@ -1690,12 +2099,37 @@ function bindEvents() {
     if (e.key === 'Escape' && state.pickerOpen) return closePicker();
     if (e.key === 'Escape' && !$('#drawer').hidden) return closeDrawer();
     const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+
+    // 全屏做题模式
+    if (state.view === 'solve' && !typing) {
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (!state.solve.revealed) {
+          state.solve.revealed = true;
+          render();
+        }
+        return;
+      }
+      if (['1', '2', '3'].includes(e.key) && state.solve.revealed && !state.solve.pendingResult) {
+        e.preventDefault();
+        const r = RESULTS[Number(e.key) - 1].key;
+        if (r === '完美') return doSolveCheckin('完美', null);
+        state.solve.pendingResult = r;
+        return render();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        return go({ view: 'library' });
+      }
+      return;
+    }
+
     if (state.view === 'review' && state.review.phase === 'run' && !typing) {
       const r = state.review;
       if (e.key === ' ') { e.preventDefault(); return revealReview(); }
       if (['1', '2', '3'].includes(e.key)) {
         e.preventDefault();
-        if (r.revealed) return recordReview(RESULTS[Number(e.key) - 1].key);
+        if (r.revealed) return requestReviewRecord(RESULTS[Number(e.key) - 1].key);
         return;
       }
       if (e.key === 's' || e.key === 'S') { e.preventDefault(); return skipReview(); }
@@ -1712,6 +2146,24 @@ function bindEvents() {
 /* ============================================================
    动作
    ============================================================ */
+function goSolve(id) {
+  closeDrawer();
+  const h = `#solve/${encodeURIComponent(id)}`;
+  if (location.hash === h) applyHash();
+  else location.hash = h;
+}
+
+/** 保存「首次错因」 */
+async function doSetReason(id, reason) {
+  try {
+    await api('/api/reason', { method: 'POST', body: JSON.stringify({ id, reason }) });
+    await reload({ silent: true });
+    toast(reason ? `首次错因已记为「${reason}」` : '已清除首次错因');
+  } catch (err) {
+    toast(`保存错因失败：${err.message}`, 'err');
+  }
+}
+
 async function doCheckin(id, result, btn) {
   if (btn) btn.disabled = true;
   try {

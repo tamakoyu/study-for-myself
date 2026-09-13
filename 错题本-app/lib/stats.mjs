@@ -125,6 +125,7 @@ export function computeStats(problems, tree = []) {
     byDifficulty: groupCount(problems, (p) => p.difficulty, [1, 2, 3, 4, 5]),
     byType: groupCount(problems, (p) => p.type, [...new Set(problems.map((p) => p.type))]),
     byPoint: pointStats(problems),
+    byReason: reasonStats(problems),
     timing: timingStats(problems),
     due: problems
       .filter((p) => p.stats.status === '到期')
@@ -160,6 +161,30 @@ function pointStats(problems) {
   const rows = [...map.values()].sort((a, b) => b.fail - a.fail || b.total - a.total);
   const untagged = problems.filter((p) => !(p.points || []).length).length;
   return { rows, untagged, taggedCount: rows.length };
+}
+
+/**
+ * 错因统计：首次错因 + 每次做错的错因，合起来看「你到底是怎么错的」。
+ * 计算失误和概念不清要用的复习策略完全不同，所以这个分布比总分更有用。
+ */
+function reasonStats(problems) {
+  const map = new Map();
+  for (const p of problems) {
+    for (const r of p.reasons || []) {
+      if (!map.has(r.reason)) map.set(r.reason, { key: r.reason, total: 0, first: 0, later: 0, ids: [] });
+      const row = map.get(r.reason);
+      row.total += 1;
+      r.first ? (row.first += 1) : (row.later += 1);
+      row.ids.push(p.id);
+    }
+  }
+  const rows = [...map.values()].sort((a, b) => b.total - a.total);
+  return {
+    rows,
+    total: rows.reduce((s, r) => s + r.total, 0),
+    noFirstReason: problems.filter((p) => !p.firstReason).length,
+    noReasonAtAll: problems.filter((p) => !(p.reasons || []).length).length,
+  };
 }
 
 /**
@@ -204,6 +229,7 @@ function slim(p) {
     difficulty: p.difficulty,
     heat: p.heat,
     points: p.points || [],
+    firstReason: p.firstReason || '',
     stats: p.stats,
     priority: p.priority,
   };

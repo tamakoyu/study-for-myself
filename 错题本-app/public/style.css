@@ -953,3 +953,119 @@ html[data-theme="light"] .scope-menu { box-shadow: 0 12px 40px rgba(16, 24, 40, 
   font-family: var(--mono); font-size: 12px; color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+
+/* ============================================================
+   做题模式 / 错因 / 图片上传
+   ============================================================ */
+.btn-primary.big { width: 100%; justify-content: center; padding: 14px 24px; font-size: 16px; }
+.btn-primary.small, .btn-ghost.small { padding: 7px 14px; font-size: 13px; border-radius: 9px; }
+
+.do-panel {
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: linear-gradient(180deg, var(--accent-soft), var(--surface) 60%);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+.do-hint { margin-top: 9px; color: var(--text-3); font-size: 12.5px; }
+.do-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 16px;
+  margin-top: 13px; font-size: 12.5px; color: var(--text-3);
+}
+.do-stats b { color: var(--text-2); }
+
+.rv-points { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+
+.solve-foot {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  margin-top: 14px; padding: 0 4px;
+  color: var(--text-3); font-size: 12.5px;
+}
+
+/* 错因：选择器与标签 */
+.reason-edit { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.rp-label { font-size: 12.5px; color: var(--text-3); }
+.reason-select {
+  padding: 6px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit; font-size: 13px;
+  outline: none; min-width: 150px;
+}
+.reason-select:focus { border-color: var(--accent); background: var(--surface); }
+.reason-tag {
+  display: inline-block; padding: 3px 11px; border-radius: 999px;
+  background: color-mix(in srgb, var(--fail) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fail) 34%, transparent);
+  color: var(--fail); font-size: 12.5px; font-weight: 560;
+}
+
+/* 错因选择器（做题/复习做错时弹出） */
+.reason-picker {
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, var(--border));
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-top: 18px;
+  animation: rv-in .18s ease;
+}
+.rp-title { font-size: 14px; font-weight: 620; margin-bottom: 12px; }
+.rp-title .hint { font-weight: 400; font-size: 12.5px; color: var(--text-3); margin-left: 8px; }
+.rp-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.rp-chips .chip { font-size: 13.5px; padding: 7px 15px; }
+.rp-chips .chip:hover { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, var(--surface-2)); color: var(--warn); }
+.rp-foot { display: flex; gap: 18px; margin-top: 14px; }
+
+/* 图片上传 */
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 26px 18px;
+  text-align: center;
+  transition: .16s;
+  cursor: default;
+}
+.drop-zone.is-over { border-color: var(--accent); background: var(--accent-soft); }
+.dz-icon { font-size: 30px; line-height: 1; margin-bottom: 8px; }
+.dz-text { color: var(--text-2); font-size: 14px; }
+.dz-hint { color: var(--text-3); font-size: 12px; margin-top: 6px; }
+
+.upload-list { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.upload-item {
+  position: relative;
+  margin: 0; width: 150px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: 8px;
+  overflow: hidden;
+}
+.upload-item img {
+  display: block; width: 100%; height: 100px;
+  object-fit: contain; border-radius: 6px; background: #fff;
+}
+.upload-item figcaption {
+  margin-top: 7px; font-size: 11px; color: var(--text-3);
+  word-break: break-all; line-height: 1.5;
+}
+.upload-item figcaption span { color: var(--text-3); opacity: .7; }
+.up-del {
+  position: absolute; top: 5px; right: 5px;
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  color: var(--text-2); font-size: 14px; line-height: 1;
+  display: grid; place-items: center;
+}
+.up-del:hover { color: var(--fail); border-color: var(--fail); }
+
+.inline-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-3); }
+.inline-field select {
+  padding: 6px 10px; border-radius: 9px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); font-family: inherit; font-size: 13px; outline: none;
+}
+
+/* 做题时把顶栏以外的干扰收掉，专心做题 */
+body.is-solving main { max-width: 940px; padding-top: 18px; }

@@ -15,7 +15,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, updatePoints, exportAll, APP_DIR } from './lib/notebook.mjs';
+import {
+  loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, updatePoints, updateReason,
+  exportAll, saveUpload, listUploads, deleteUploads, promptForImages, APP_DIR,
+} from './lib/notebook.mjs';
 import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.mjs';
 import { chapterOptions } from './lib/create.mjs';
 import { RESULTS } from './lib/parse.mjs';
@@ -34,6 +37,10 @@ const MIME = {
   '.woff': 'font/woff',
   '.ttf': 'font/ttf',
   '.ico': 'image/x-icon',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
 };
 
 function parseArgs(argv) {
@@ -55,13 +62,13 @@ function sendJson(res, status, data) {
   res.end(body);
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 1e6) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on('data', (c) => {
       size += c.length;
-      if (size > 1e6) {
+      if (size > maxBytes) {
         reject(Object.assign(new Error('请求体过大'), { status: 413 }));
         req.destroy();
         return;
@@ -104,6 +111,23 @@ function serveStatic(req, res, urlPath) {
   });
 }
 
+/** 只服务 uploads 目录里的文件，防目录穿越 */
+function serveUpload(cfg, req, res, rel) {
+  const name = path.basename(decodeURIComponent(rel));
+  const abs = path.join(cfg.uploadDir, name);
+  if (!abs.startsWith(cfg.uploadDir) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('404');
+    return;
+  }
+  const ext = path.extname(abs).toLowerCase();
+  res.writeHead(200, {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Content-Length': fs.statSync(abs).size,
+    'Cache-Control': 'no-cache',
+  });
+  fs.createReadStream(abs).pipe(res);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cfg = loadConfig();
@@ -119,6 +143,12 @@ async function main() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const p = url.pathname;
+
+    // 上传暂存的图片，直接以静态文件暴露（只读，且只能读 uploads 目录）
+    if (p.startsWith('/uploads/')) {
+      serveUpload(cfg, req, res, p.slice('/uploads/'.length));
+      return;
+    }
 
     if (!p.startsWith('/api/')) {
       serveStatic(req, res, p);
@@ -176,6 +206,30 @@ async function main() {
         return;
       }
 
+      /* ---- 图片：上传暂存 → 生成提示词交给 AI 转成题目 ---- */
+      if (p === '/api/upload' && req.method === 'POST') {
+        const body = await readBody(req, 24 * 1024 * 1024);
+        sendJson(res, 200, { ok: true, ...saveUpload(cfg, body) });
+        return;
+      }
+
+      if (p === '/api/uploads' && req.method === 'GET') {
+        sendJson(res, 200, listUploads(cfg));
+        return;
+      }
+
+      if (p === '/api/uploads' && req.method === 'DELETE') {
+        const body = await readBody(req);
+        sendJson(res, 200, { ok: true, ...deleteUploads(cfg, body.names) });
+        return;
+      }
+
+      if (p === '/api/prompt-images' && req.method === 'POST') {
+        const body = await readBody(req);
+        sendJson(res, 200, promptForImages(cfg, body.names, body));
+        return;
+      }
+
       if (p === '/api/export' && (req.method === 'POST' || req.method === 'GET')) {
         sendJson(res, 200, { ok: true, ...exportAll(cfg) });
         return;
@@ -183,7 +237,14 @@ async function main() {
 
       if (p === '/api/checkin' && req.method === 'POST') {
         const body = await readBody(req);
-        const out = checkin(cfg, body.id, body.result, body.date, body.seconds);
+        const out = checkin(cfg, body.id, body.result, body.date, body.seconds, body.reason);
+        sendJson(res, 200, out);
+        return;
+      }
+
+      if (p === '/api/reason' && req.method === 'POST') {
+        const body = await readBody(req);
+        const out = updateReason(cfg, body.id, body.reason);
         sendJson(res, 200, out);
         return;
       }
@@ -240,6 +301,7 @@ async function main() {
         .join(' ')}`
     );
     if (snap.errors.length) console.log(`  ⚠ 解析失败 ${snap.errors.length} 篇`);
+    console.log(`  上传暂存  ${cfg.uploadDir}`);
     console.log('');
     console.log('  按 Ctrl+C 退出');
     console.log('');

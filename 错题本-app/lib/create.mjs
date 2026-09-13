@@ -61,7 +61,7 @@ const DIFF_WORD = { 1: '送分', 2: '基础', 3: '中档', 4: '较难', 5: '压�
 const HEAT_WORD = { 1: '极少单独考', 2: '低频', 3: '中频', 4: '高频', 5: '超高频' };
 
 /** 生成一篇骨架笔记 */
-export function renderNote({ subject, chapter, num, slug, stem, type, difficulty = 3, heat = 3, title }) {
+export function renderNote({ subject, chapter, num, slug, stem, type, difficulty = 3, heat = 3, title, reason }) {
   const pad = String(num).padStart(2, '0');
   const stars = '⭐'.repeat(difficulty) + '☆'.repeat(5 - difficulty);
   const fires = '🔥'.repeat(heat) + '☆'.repeat(5 - heat);
@@ -105,9 +105,15 @@ ${stem}
 > [!warning]- 展开 · 易错提醒
 > ⏳ 待补充
 
+## 错因分析
+
+> [!question]- 展开 · 错因（做题时别看）
+> **首次错因**　${reason || '⏳ 待补充'}
+
 ## 打卡记录
 
-> 做完一次勾一个结果（每次只勾一个）：勾到「完美」= 复习完成；只勾了「普通 / 失败」= 仍待复习。
+> 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。
+> 做错的记一下错因，程序会统计你到底是怎么错的。
 
 - [ ] 第 1 次 · 完美
 - [ ] 第 1 次 · 普通
@@ -168,6 +174,7 @@ export function createQuestions(rootDir, items) {
       difficulty: Number(item.difficulty) || 3,
       heat: Number(item.heat) || 3,
       title: item.title,
+      reason: item.reason,
     });
     fs.writeFileSync(file, body, 'utf8');
     created.push({
@@ -194,11 +201,15 @@ export function chapterOptions() {
 }
 
 /** 生成一段可以直接丢给 AI 的提示词 */
-export function buildPrompt(stems, { category, subject, chapter } = {}) {
+export function buildPrompt(stems, { category, subject, chapter, reason, intro } = {}) {
   const body = stems.map((s, i) => `【第 ${i + 1} 题】\n${s}`).join('\n\n');
   const hint = [category, subject, chapter].filter(Boolean).join(' / ');
-  return `请把下面${stems.length > 1 ? ` ${stems.length} 道题` : '这道题'}做成我的错题本笔记，一题一篇。
+  const reasonLine = reason
+    ? `这批题的错因是「${reason}」，请写进每篇的 \`**首次错因**\`。\n`
+    : `**另外：每道题的 \`**首次错因**\` 先留「⏳ 待补充」，并在回复里问我这几道题分别是怎么错的。**\n`;
+  return `${intro ? `${intro}\n\n` : ''}请把下面${stems.length > 1 ? ` ${stems.length} 道题` : '这道题'}做成我的错题本笔记，一题一篇。
 
+${reasonLine}
 结构：\`错题本/<大类>/<科目>/<章节>/<章节>-NN-<短标题>.md\`
 - 大类：数学 或 408
 - 数学的科目：高数 / 线代 / 概率论
@@ -251,7 +262,8 @@ heat: <五格，用 ☆ 补满，如 🔥🔥🔥🔥☆>
 
 ## 打卡记录
 
-> 做完一次勾一个结果（每次只勾一个）：勾到「完美」= 复习完成；只勾了「普通 / 失败」= 仍待复习。
+> 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。
+> 做错的记一下错因，程序会统计你到底是怎么错的。
 
 - [ ] 第 1 次 · 完美
 - [ ] 第 1 次 · 普通
@@ -274,4 +286,31 @@ heat: <五格，用 ☆ 补满，如 🔥🔥🔥🔥☆>
 6. 不要改动我已有的文件，只新建。
 
 ${body}`;
+}
+
+/**
+ * 给「上传图片 → 转成题目」用的提示词。
+ * 关键在于：**不要原图**，要 AI 看懂之后用文字重写题干、用代码把图形重画一遍。
+ */
+export function buildImagePrompt(paths, opts = {}) {
+  const n = paths.length;
+  const intro = [
+    `我上传了 ${n} 张题目图片，请你把它们逐张转成我的错题本笔记。`,
+    '',
+    '**第一步：读图。** 图片就在本机这些路径上，直接读：',
+    ...paths.map((p, i) => `  ${i + 1}. ${p}`),
+    '',
+    '**第二步：按下面的规矩写题（这几条最重要）。**',
+    '1. **不要把我上传的原图直接放进笔记。** 请你看懂图里的内容之后，用**文字 + LaTeX** 把题干重写出来。',
+    '2. **图里有图形的（函数图像、几何图、二叉树、流程图、电路图、地址划分图…），请写代码重新画一张**：',
+    '   用 Python(matplotlib) 或手写 SVG 生成图片，存到 `错题本/picture/` 下，再在笔记里用 `![[文件名]]` 引用。',
+    '   要求：清晰、坐标/标注完整、信息与原图一致，风格与笔记整体协调。',
+    '3. 图里手写模糊、印刷不清的地方，按最合理的理解补全，并在解析里说明你补了什么假设。',
+    '4. 一张图里有多道题的，拆成多篇。',
+  ].join('\n');
+
+  return buildPrompt(
+    paths.map((_, i) => `（内容见第 ${i + 1} 张图，路径：${paths[i]}）`),
+    { ...opts, intro }
+  );
 }

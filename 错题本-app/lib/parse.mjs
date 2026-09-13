@@ -23,9 +23,13 @@ const SKIP_PREFIX = ['00-'];
 const NOTE_TAGS = ['错题本', '高数错题本'];
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
-/** 打卡记录：- [x] 第 1 次 · 完美 · 2026-09-13 · 192s   （日期与用时都可省略） */
+/** 打卡记录：- [x] 第 1 次 · 完美 · 2026-09-13 · 192s · 错因：计算失误（后三段都可省略） */
 const CHECKIN_RE =
-  /^-\s*\[([ xX])\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*(?:·\s*(\d{4}-\d{2}-\d{2}))?\s*(?:·\s*(\d+)\s*s)?\s*$/;
+  /^-\s*\[([ xX])\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*(?:·\s*(\d{4}-\d{2}-\d{2}))?\s*(?:·\s*(\d+)\s*s)?\s*(?:·\s*错因[:：]\s*(.+?))?\s*$/;
+
+/** `**首次错因**　计算失误` */
+// 这一行在折叠标注里，所以前面可能带 `> `
+const REASON_LINE_RE = /^(?:>\s*)?\*\*首次错因\*\*\s*[　\s]*(.*)$/m;
 
 /** 遗忘曲线：第 n 次做到「完美」之后，隔多少天该重做一遍 */
 export const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30];
@@ -164,6 +168,7 @@ function parseCheckins(text) {
       result: m[3],
       date: m[4] || null,
       seconds: m[5] ? Number(m[5]) : null,
+      reason: m[6] ? m[6].trim() : null,
       line: i,
       raw: line,
     });
@@ -290,6 +295,20 @@ export function parseNote(absPath, rootDir) {
 
   const checkins = parseCheckins(get('打卡记录'));
 
+  // 首次错因（录入这道题时写下的原因）+ 历次做错的错因汇总
+  const reasonText = get('错因分析', '错因');
+  const rawReason = (reasonText.match(REASON_LINE_RE) || [])[1]?.trim() || '';
+  // 「⏳ 待补充」是占位符，不算真的写过错因
+  const firstReason = /^⏳|^待补充$/.test(rawReason) ? '' : rawReason;
+  const reasons = [
+    ...(firstReason ? [{ reason: firstReason, attempt: 0, date: null, first: true }] : []),
+    ...checkins
+      .filter((c) => c.done && c.reason)
+      .map((c) => ({ reason: c.reason, attempt: c.attempt, date: c.date, first: false })),
+  ];
+  const reasonCounts = {};
+  for (const r of reasons) reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1;
+
   const note = {
     id,
     num,
@@ -307,6 +326,9 @@ export function parseNote(absPath, rootDir) {
     heat: countChar(heatRaw, '🔥'),
     difficultyRaw,
     heatRaw,
+    firstReason,
+    reasons,
+    reasonCounts,
     points: Array.isArray(fm.data.points) ? fm.data.points.filter(Boolean) : fm.data.points ? [fm.data.points] : [],
     profile,
     keypoints: profileCallouts[0]?.body || '',

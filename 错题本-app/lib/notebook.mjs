@@ -7,8 +7,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanNotebook, today } from './parse.mjs';
 import { computeStats, filterByScope } from './stats.mjs';
-import { recordCheckin, undoCheckin, setMeta, setPoints, backup } from './write.mjs';
-import { chapterOptions, createQuestions, splitProblems, detect as detectByKeywords, detectType, normalizeMath, slugOf, buildPrompt, nextNumber as nextNumberFor } from './create.mjs';
+import { recordCheckin, undoCheckin, setMeta, setPoints, setReason, backup } from './write.mjs';
+import {
+  chapterOptions, createQuestions, splitProblems, detect as detectByKeywords, detectType,
+  normalizeMath, slugOf, buildPrompt, buildImagePrompt, nextNumber as nextNumberFor,
+} from './create.mjs';
 import { TAXONOMY, UNCLASSIFIED } from './taxonomy.mjs';
 
 export const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -19,6 +22,7 @@ export function loadConfig() {
     notebookDir: path.resolve(APP_DIR, '..', '错题本'),
     backupDir: path.join(APP_DIR, 'backups'),
     exportDir: path.join(APP_DIR, 'data'),
+    uploadDir: path.join(APP_DIR, 'uploads'),
     port: 4173,
     host: '127.0.0.1',
   };
@@ -34,6 +38,7 @@ export function loadConfig() {
       cfg.notebookDir = path.resolve(APP_DIR, cfg.notebookDir);
       cfg.backupDir = path.resolve(APP_DIR, cfg.backupDir);
       cfg.exportDir = path.resolve(APP_DIR, cfg.exportDir);
+      cfg.uploadDir = path.resolve(APP_DIR, cfg.uploadDir || 'uploads');
       // 环境变量优先，方便指向另一份错题本（例如做测试）
       if (process.env.NOTEBOOK_DIR) cfg.notebookDir = path.resolve(process.env.NOTEBOOK_DIR);
       if (process.env.NOTEBOOK_PORT) cfg.port = Number(process.env.NOTEBOOK_PORT);
@@ -90,13 +95,13 @@ function findProblem(cfg, id) {
   return byId;
 }
 
-export function checkin(cfg, id, result, date, seconds) {
+export function checkin(cfg, id, result, date, seconds, reason) {
   const p = findProblem(cfg, id);
   if (p.warnings.some((w) => w.includes('打卡记录'))) {
     throw Object.assign(new Error('该笔记缺少 `## 打卡记录` 区块，为防误写已中止'), { status: 409 });
   }
   backup(p.absPath, cfg.notebookDir, cfg.backupDir);
-  const res = recordCheckin(p.absPath, { result, date, seconds });
+  const res = recordCheckin(p.absPath, { result, date, seconds, reason });
   return { ok: true, ...res, problem: findProblem(cfg, id) };
 }
 
@@ -117,6 +122,14 @@ export function updateMeta(cfg, id, patch) {
   backup(p.absPath, cfg.notebookDir, cfg.backupDir);
   setMeta(p.absPath, clean);
   return { ok: true, problem: findProblem(cfg, id) };
+}
+
+/** 改首次错因 */
+export function updateReason(cfg, id, reason) {
+  const p = findProblem(cfg, id);
+  backup(p.absPath, cfg.notebookDir, cfg.backupDir);
+  const res = setReason(p.absPath, reason);
+  return { ok: true, ...res, problem: findProblem(cfg, id) };
 }
 
 /** 改考点标签 */
@@ -278,3 +291,63 @@ function renderMarkdownReport(snap) {
 }
 
 export { today };
+
+/* ---------------- 图片上传（等着交给 AI 转成题目，不直接展示原图）---------------- */
+
+const EXT_OF = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+const MAX_IMAGE = 15 * 1024 * 1024;
+
+export function saveUpload(cfg, { name, dataUrl }) {
+  const m = String(dataUrl || '').match(/^data:(image\/[\w+.-]+);base64,([\s\S]+)$/);
+  if (!m) throw Object.assign(new Error('不是合法的图片（需要 data:image/...;base64,...）'), { status: 400 });
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > MAX_IMAGE) throw Object.assign(new Error('单张图片不能超过 15MB'), { status: 413 });
+
+  fs.mkdirSync(cfg.uploadDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const base = String(name || 'image')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^\w\u4e00-\u9fa5-]/g, '_')
+    .slice(0, 30);
+  const ext = EXT_OF[m[1]] || 'png';
+  let file = path.join(cfg.uploadDir, `${stamp}-${base}.${ext}`);
+  let n = 1;
+  while (fs.existsSync(file)) file = path.join(cfg.uploadDir, `${stamp}-${base}-${++n}.${ext}`);
+  fs.writeFileSync(file, buf);
+  return { name: path.basename(file), bytes: buf.length, type: m[1] };
+}
+
+export function listUploads(cfg) {
+  if (!fs.existsSync(cfg.uploadDir)) return { dir: cfg.uploadDir, files: [] };
+  const files = fs
+    .readdirSync(cfg.uploadDir)
+    .filter((f) => !f.startsWith('.'))
+    .map((f) => {
+      const st = fs.statSync(path.join(cfg.uploadDir, f));
+      return { name: f, bytes: st.size, mtime: st.mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  return { dir: cfg.uploadDir, files };
+}
+
+export function deleteUploads(cfg, names) {
+  const list = Array.isArray(names) && names.length ? names : null;
+  const dir = cfg.uploadDir;
+  if (!fs.existsSync(dir)) return { removed: 0 };
+  const targets = list ? list : fs.readdirSync(dir).filter((f) => !f.startsWith('.'));
+  let removed = 0;
+  for (const name of targets) {
+    const abs = path.join(dir, path.basename(String(name)));
+    if (abs.startsWith(dir) && fs.existsSync(abs)) {
+      fs.unlinkSync(abs);
+      removed += 1;
+    }
+  }
+  return { removed };
+}
+
+/** 生成「把图片转成题目」的提示词 */
+export function promptForImages(cfg, files, opts = {}) {
+  const paths = (files || []).map((f) => path.join(cfg.uploadDir, path.basename(f)));
+  return { prompt: buildImagePrompt(paths, opts), paths };
+}

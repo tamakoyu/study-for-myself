@@ -2,7 +2,9 @@
 
 考研错题本：**Markdown 存数据 + 本地程序管复习**。
 
-- 数据是 `../错题本/` 里的普通 Markdown 文件，Obsidian 里照常能看能改
+> 程序进 git，**笔记不进 git**（私人内容，只留本地 Obsidian）。
+
+- 数据是 `../错题本/` 里的普通 Markdown 文件（**不入 git**），Obsidian 里照常能看能改
 - 程序读这些文件、写回打卡记录，提供总览统计、题库浏览、刷题、增题
 - 目录结构：`错题本/<大类>/<科目>/<章节>/题目.md`
 
@@ -43,7 +45,7 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 
 ---
 
-## 四个页面
+## 五个页面
 
 ### ① 总览 —— 四层下钻
 
@@ -64,7 +66,18 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 点开右侧抽屉：难度、热度可点星/点火直接改，三个打卡按钮，打卡时间线（可撤销），
 题干，以及四个折叠块（核心考点与主要难点 / 答案 / 解析 / 易错提醒）。
 
-### ③ 复习
+### ③ 做题（全屏）
+
+从题库点开某题只是**预览**（半窗口，没有打卡按钮）。预览里点 **▶ 开始做题（全屏）**，
+进入单题全屏模式：解析、错因、考点全部藏起来，计时开始，做完再看答案、再打卡。
+
+| 键 | 作用 |
+| --- | --- |
+| `空格` | 显示答案与解析 |
+| `1` `2` `3` | 记「完美 / 普通 / 失败」，做错会接着问错因 |
+| `Esc` | 退出 |
+
+### ④ 复习
 
 一题一屏，答案默认隐藏。
 
@@ -96,7 +109,7 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 每记一次结果立刻写进对应的 Markdown 文件，不用结束时统一保存。
 一局结束出成绩单：各结果几题、总用时、平均每题用时、逐题结果（点行可回看）。
 
-### ④ 增题
+### ⑤ 增题
 
 粘贴题干 → 程序自动**分大类、分科目、分章节、定题型、编号、命名、建骨架、写盘**。
 多道题用一行 `---` 分隔，也可以选按空行分隔或整段当一题。
@@ -106,6 +119,35 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 
 > **答案与解析留空。** 程序不会解题。点「📋 复制提示词给 AI」，
 > 提示词里已经带好了完整格式规范，发给 AI（或我）就能拿到带答案的成品。
+
+---
+
+## 错因分析
+
+每道题都有一个 `## 错因分析` 段，和一个**首次错因**（录入时就该写：你为什么会错）。
+之后每一次做错，程序都会问一句「问题出在哪」，记进那条打卡记录：
+
+```markdown
+- [x] 第 2 次 · 失败 · 2026-09-14 · 245s · 错因：计算失误
+```
+
+错因用固定词表（也允许自己写）：**概念不清 / 方法不会 / 思路方向错 / 计算失误 /
+审题错误 / 公式记错 / 粗心大意 / 时间不够**。
+
+总览里的 **🧠 错因分布** 会统计「你到底是怎么错的」——计算失误要练手感，概念不清得回课本，
+这两种错的复习策略完全不同，所以这个分布比分数更有用。
+
+> 做题时错因和解析一起被藏起来，做完才显示。
+
+## 图片 → 题目
+
+**不直接存你的原图。** 流程是：
+
+1. 增题页把截图拖进去（可多张，暂存于 `错题本-app/uploads/`）
+2. 选好这批题的错因，点 **📋 生成提示词**
+3. 把提示词发给 AI（或我）
+4. AI 看懂图后：**用文字 + LaTeX 重写题干**，题里如果有图形，**写代码重新画一张**存进
+   `错题本/picture/`，再引用 —— 不会把原图贴进笔记
 
 ---
 
@@ -194,10 +236,15 @@ points:
 GET   /api/health                               自检
 GET   /api/questions                            全部题目 + 导航树 + 全局统计
 GET   /api/stats?category=&subject=&chapter=    某范围的统计
-POST  /api/checkin      { id, result, date?, seconds? }
+POST  /api/checkin      { id, result, date?, seconds?, reason? }
 POST  /api/undo         { id, attempt, result }
 PATCH /api/question     { id, difficulty?, heat?, type? }
 POST  /api/points       { id, points[] }                 改考点标签
+POST  /api/reason       { id, reason }                   改首次错因
+POST  /api/upload       { name, dataUrl }                上传图片（暂存）
+GET   /api/uploads                                       暂存的图片列表
+DELETE /api/uploads     { names? }                       删除暂存图片
+POST  /api/prompt-images { names[], reason? }            生成「图片转题目」提示词
 POST  /api/detect       { raw, mode }           识别粘贴的题干，不写盘
 POST  /api/new          { items }               批量建题（写盘）
 POST  /api/prompt       { stems, category?, subject?, chapter? }   生成给 AI 的提示词
@@ -225,7 +272,7 @@ POST  /api/export                               导出 questions.json 与 stats.
 │   ├── markdown.js         极简 Markdown + LaTeX 渲染
 │   └── vendor/katex/       离线内置的 KaTeX（含字体）
 ├── scripts/migrate.mjs     一次性迁移脚本（旧结构 → 三级结构）
-├── test/e2e.mjs            无头浏览器端到端测试（38 项断言）
+├── test/e2e.mjs            无头浏览器端到端测试（52 项断言）
 ├── backups/                自动备份（不入库）
 └── data/                   导出（不入库）
 ```
@@ -244,8 +291,9 @@ NOTEBOOK_DIR=/tmp/notebook-test NOTEBOOK_PORT=4199 node server.mjs --no-open &
 node test/e2e.mjs          # 截图输出到 /tmp/e2e-*.png
 ```
 
-覆盖：四层总览下钻、顶栏范围选择器、题库筛选与抽屉、考点标签增删、复习换范围/混刷/
-章节多选/键盘流/成绩单/打卡写回、遗忘曲线提醒、用时记录、增题识别与落盘、深浅色主题。
+覆盖：四层总览下钻、顶栏范围选择器、题库筛选、抽屉预览、**全屏做题模式**、
+错因选择与写回、考点标签增删、复习换范围/混刷/章节多选/键盘流/成绩单、
+遗忘曲线提醒、用时记录、**图片上传与提示词生成**、增题识别与落盘、深浅色主题。
 
 ## 手机上用
 

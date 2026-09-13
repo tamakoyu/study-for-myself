@@ -9,9 +9,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RESULTS, renderGauge, today } from './parse.mjs';
 
-/** 已完成的打卡行：- [x] 第 1 次 · 完美 · 2026-09-13 · 192s（日期与用时都可省略） */
+/** 已完成的打卡行：- [x] 第 1 次 · 完美 · 2026-09-13 · 192s · 错因：计算失误（后三段都可省略） */
 const CHECKIN_LINE_RE =
-  /^-\s*\[[xX]\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*(?:·\s*(\d{4}-\d{2}-\d{2}))?\s*(?:·\s*(\d+)\s*s)?\s*$/;
+  /^-\s*\[[xX]\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*(?:·\s*(\d{4}-\d{2}-\d{2}))?\s*(?:·\s*(\d+)\s*s)?\s*(?:·\s*错因[:：]\s*(.+?))?\s*$/;
 
 const PROFILE_LABEL = { type: '考的类型', difficulty: '难度', heat: '考研热度' };
 
@@ -64,7 +64,7 @@ export function renderCheckinBlock(checkins) {
           (c) =>
             `- [x] 第 ${c.attempt} 次 · ${c.result}${c.date ? ` · ${c.date}` : ''}${
               c.seconds > 0 ? ` · ${Math.round(c.seconds)}s` : ''
-            }`
+            }${c.reason ? ` · 错因：${c.reason}` : ''}`
         )
         .join('\n')
     );
@@ -74,7 +74,8 @@ export function renderCheckinBlock(checkins) {
   return [
     '## 打卡记录',
     '',
-    '> 做完一次勾一个结果（每次只勾一个）：勾到「完美」= 进入遗忘曲线；只勾了「普通 / 失败」= 仍待复习。',
+    '> 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。',
+    '> 做错的记一下错因，程序会统计你到底是怎么错的。',
     '',
     parts.join('\n\n'),
     '',
@@ -85,7 +86,7 @@ export function renderCheckinBlock(checkins) {
  * 记录一次打卡：追加一条记录。
  * 每次都先解出全部已完成记录，再整体规范化写回，因此不会出现编号错乱。
  */
-export function recordCheckin(absPath, { result, date, seconds }) {
+export function recordCheckin(absPath, { result, date, seconds, reason }) {
   if (!RESULTS.includes(result)) throw new Error(`未知结果：${result}`);
   const text = fs.readFileSync(absPath, 'utf8');
   const lines = text.split('\n');
@@ -102,6 +103,7 @@ export function recordCheckin(absPath, { result, date, seconds }) {
         result: m[2],
         date: m[3] || null,
         seconds: m[4] ? Number(m[4]) : null,
+        reason: m[5] ? m[5].trim() : null,
       });
   }
   const nextAttempt = done.reduce((m, c) => Math.max(m, c.attempt), 0) + 1;
@@ -111,6 +113,7 @@ export function recordCheckin(absPath, { result, date, seconds }) {
     result,
     date: date || today(),
     seconds: Number(seconds) > 0 ? Math.round(Number(seconds)) : null,
+    reason: reason ? String(reason).trim().slice(0, 40) : null,
   });
 
   const block = renderCheckinBlock(done).split('\n');
@@ -137,6 +140,7 @@ export function undoCheckin(absPath, { attempt, result }) {
       result: m[2],
       date: m[3] || null,
       seconds: m[4] ? Number(m[4]) : null,
+      reason: m[5] ? m[5].trim() : null,
     };
     if (!removed && item.attempt === Number(attempt) && item.result === result) {
       removed = true;
@@ -240,4 +244,43 @@ export function setPoints(absPath, points) {
   text = text.slice(0, fmMatch.index) + `---\n${lines.join('\n')}\n---` + text.slice(fmMatch.index + fmMatch[0].length);
   fs.writeFileSync(absPath, normalizeEof(text), 'utf8');
   return { points: list };
+}
+
+const REASON_SECTION = [
+  '## 错因分析',
+  '',
+  '> [!question]- 展开 · 错因（做题时别看）',
+  '> **首次错因**　',
+  '',
+];
+
+/**
+ * 写入「首次错因」。
+ * 已有 `## 错因分析` 段就只改那一行；没有就整段插到 `## 打卡记录` 之前。
+ */
+export function setReason(absPath, reason) {
+  const clean = String(reason || '').trim().slice(0, 60);
+  const text = fs.readFileSync(absPath, 'utf8');
+  const lines = text.split('\n');
+  const range = findSection(lines, '错因分析');
+
+  if (range) {
+    const idx = lines.findIndex((l, i) => i >= range.start && i < range.end && /^\*\*首次错因\*\*|^>\s*\*\*首次错因\*\*/.test(l));
+    if (idx !== -1) {
+      const prefix = /^>/.test(lines[idx]) ? '> **首次错因**　' : '**首次错因**　';
+      lines[idx] = `${prefix}${clean}`;
+      fs.writeFileSync(absPath, normalizeEof(lines), 'utf8');
+      return { reason: clean };
+    }
+    // 段在但行没了 → 在段内补一行
+    lines.splice(range.start + 1, 0, '', '> [!question]- 展开 · 错因（做题时别看）', `> **首次错因**　${clean}`);
+    fs.writeFileSync(absPath, normalizeEof(lines), 'utf8');
+    return { reason: clean };
+  }
+
+  const ci = lines.findIndex((l) => l.trim() === '## 打卡记录');
+  const at = ci === -1 ? lines.length : ci;
+  lines.splice(at, 0, ...REASON_SECTION.map((l) => (l.includes('首次错因') ? `> **首次错因**　${clean}` : l)));
+  fs.writeFileSync(absPath, normalizeEof(lines), 'utf8');
+  return { reason: clean };
 }

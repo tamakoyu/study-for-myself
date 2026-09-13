@@ -88,6 +88,9 @@ class Session {
   }
 }
 
+const api2 = (path, options) =>
+  fetch(`${APP}${path}`, { headers: { 'Content-Type': 'application/json' }, ...options }).then((r) => r.json());
+
 const results = [];
 const check = (label, ok, detail = '') => {
   results.push({ label, ok });
@@ -193,11 +196,56 @@ const whereText = await s.js(`return document.querySelector('.pc-where')?.textCo
 check('题库：卡片显示「大类·科目·章节」', whereText.includes('数学') && whereText.includes('极限'), whereText);
 
 await s.click('.problem-card');
-await s.waitFor('#drawerPanel .checkin-panel');
+await s.waitFor('#drawerPanel .do-panel');
 const folds = await s.js(`return document.querySelectorAll('#drawerPanel details.fold').length;`);
 const opened = await s.js(`return document.querySelectorAll('#drawerPanel details.fold[open]').length;`);
 check('详情抽屉：折叠块默认收起', folds >= 4 && opened === 0, `${folds} 个折叠块，展开 ${opened}`);
+check(
+  '详情抽屉：有「开始做题」、已无打卡按钮',
+  (await s.js(`return !!document.querySelector('#drawerPanel [data-solve-start]');`)) === true &&
+    (await s.js(`return !!document.querySelector('#drawerPanel [data-checkin]');`)) === false
+);
 await s.shot('04-drawer');
+
+/* ---------- 5.4 全屏做题模式 ---------- */
+await s.click('[data-solve-start]');
+await sleep(900);
+await s.waitFor('.rv-reveal');
+check('做题模式：进入全屏，解析与错因都藏着', (await s.js(`return !document.querySelector('.rv-revealed');`)) === true);
+const solveWho = await s.js(`return document.querySelector('.rv-num')?.textContent.trim() || '';`);
+check('做题模式：错因不可见', (await s.js(`return !document.querySelector('.fold-reason');`)) === true, solveWho);
+await s.js(`document.dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true}));`);
+await sleep(500);
+check('做题模式：空格显示答案', (await s.js(`return !!document.querySelector('.rv-revealed');`)) === true);
+check('做题模式：展开后能看到「错因分析」', (await s.js(`return !!document.querySelector('.fold-reason');`)) === true);
+await s.shot('12-solve');
+
+await s.js(`document.querySelector('[data-solve="record"][data-result="失败"]').click();`);
+await sleep(500);
+check('做题模式：点「失败」弹出错因选择器', (await s.js(`return !!document.querySelector('.reason-picker');`)) === true);
+await s.shot('13-reason');
+await s.js(`document.querySelector('.rp-chips [data-reason="计算失误"]').click();`);
+await sleep(1500);
+const afterReason = await (await fetch(`${APP}/api/questions`)).json();
+const solved = afterReason.problems.find((x) => x.num === solveWho);
+check('做题模式：错因写进打卡记录', !!solved && solved.checkins.some((c) => c.reason === '计算失误'), solved ? solved.num : 'NO');
+check('做题模式：用时也记下了', !!solved && solved.checkins.some((c) => c.seconds > 0));
+
+await s.js(`location.hash='#library';`);
+await sleep(900);
+await s.click('.problem-card');
+await s.waitFor('#drawerPanel [data-reason-select]');
+await s.js(
+  `var sel=document.querySelector('[data-reason-select]'); sel.value='概念不清';
+   sel.dispatchEvent(new Event('change',{bubbles:true}));`
+);
+await sleep(1500);
+const afterFirst = await (await fetch(`${APP}/api/questions`)).json();
+check(
+  '详情：首次错因可写入',
+  afterFirst.problems.some((x) => x.firstReason === '概念不清'),
+  afterFirst.problems.filter((x) => x.firstReason).map((x) => `${x.num}=${x.firstReason}`).join(' ')
+);
 await s.click('[data-close-drawer]');
 
 /* ---------- 5.5 考点标签 ---------- */
@@ -281,7 +329,9 @@ for (let i = 0; i < 8; i++) {
   await s.js(`document.querySelector('[data-review="reveal"]')?.click();`);
   await sleep(350);
   await s.js(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'2',bubbles:true}));`);
-  await sleep(650);
+  await sleep(500);
+  await s.js(`document.querySelector('.rp-foot [data-reason]')?.click();`);
+  await sleep(700);
 }
 await s.waitFor('.rv-setup');
 const doneTitle = await s.js(`return document.querySelector('.rv-setup-head h2').textContent.trim();`);
@@ -292,7 +342,7 @@ await s.shot('08-review-done');
 
 const apiStats = await (await fetch(`${APP}/api/stats`)).json();
 // 本局 5 次 + 预置的那 1 次（用来制造「遗忘曲线到期」）
-check('复习：打卡确实写回文件', apiStats.totals.checkins === 6, `累计打卡 ${apiStats.totals.checkins} 次`);
+check('复习：打卡确实写回文件', apiStats.totals.checkins === 7, `累计打卡 ${apiStats.totals.checkins} 次`);
 
 /* ---------- 6.5 遗忘曲线 + 用时分析 ---------- */
 const detail = await (await fetch(`${APP}/api/stats`)).json();
@@ -309,6 +359,7 @@ const duePanel = await s.js(
 );
 check('总览：出现「遗忘曲线提醒」面板（测试数据里有到期的题）', duePanel.includes('遗忘曲线提醒'), duePanel.slice(0, 120));
 check('总览：出现「考点薄弱排行」面板', duePanel.includes('考点薄弱排行'));
+check('总览：出现「错因分布」面板', duePanel.includes('错因分布'), duePanel.slice(0, 170));
 await s.shot('11-insights');
 
 const q1 = await (await fetch(`${APP}/api/questions`)).json();
@@ -339,6 +390,33 @@ check(
 );
 check('增题：第二题归到 408/操作系统', items[1]?.cat === '408' && items[1]?.sub === '操作系统', JSON.stringify(items[1]));
 await s.shot('09-add');
+
+// 图片：造一张 PNG 传上去
+await s.js(
+  `var c=document.createElement('canvas'); c.width=80; c.height=40;
+   var g=c.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,80,40);
+   g.fillStyle='#000'; g.fillText('E2E',10,25);
+   window.__png = c.toDataURL('image/png');`
+);
+const dataUrl = await s.js(`return window.__png;`);
+const up = await api2('/api/upload', { method: 'POST', body: JSON.stringify({ name: 'e2e题目.png', dataUrl }) });
+check('图片：上传成功', !!up.name, up.name);
+await s.js(`location.hash='#add';`);
+await sleep(1400);
+const thumbs = await s.js(`return document.querySelectorAll('.upload-item img').length;`);
+check('图片：缩略图显示在增题页', thumbs >= 1, `${thumbs} 张`);
+check('图片：「生成提示词」按钮已可用', (await s.js(`return !document.querySelector('[data-add="prompt-images"]').disabled;`)) === true);
+await s.shot('14-upload');
+const promptOut = await api2('/api/prompt-images', {
+  method: 'POST',
+  body: JSON.stringify({ names: [up.name], reason: '计算失误' }),
+});
+check(
+  '图片：提示词强调「不要原图、要重画」',
+  promptOut.prompt.includes('不要把我上传的原图直接放进笔记') && promptOut.prompt.includes('重新画一张'),
+  `${promptOut.prompt.length} 字`
+);
+await api2('/api/uploads', { method: 'DELETE', body: JSON.stringify({}) });
 
 const before = (await (await fetch(`${APP}/api/questions`)).json()).problems.length;
 await s.js(`document.querySelector('[data-add="create"]').click();`);
