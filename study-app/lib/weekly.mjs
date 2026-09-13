@@ -80,7 +80,7 @@ ${inWeek.length ? inWeek.map((r) => `### ${r.date}\n${r.body}`).join('\n\n') : '
 
 ## 错题情况
 
-- 错题总数 ${m.totals?.total ?? 0}，已掌握 ${m.totals?.done ?? 0}，待复习 ${m.totals?.pending ?? 0}
+- 题目总数 ${m.totals?.total ?? 0}，已复习 ${m.totals?.done ?? 0}，待复习 ${m.totals?.pending ?? 0}
 - 到遗忘曲线的：${dueList.length ? dueList.join('、') : '无'}
 - 反复做错的题：${trouble.length ? trouble.join('、') : '无'}
 - 错因分布：${reasons.length ? reasons.join('、') : '还没记录'}

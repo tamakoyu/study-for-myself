@@ -275,7 +275,12 @@ await s.js(`[...document.querySelectorAll('[data-filter="kind"]')].find(x=>x.dat
 await sleep(1200);
 const commonCards = await s.js(`return document.querySelectorAll('.problem-card').length;`);
 const kindTags = await s.js(`return document.querySelectorAll('.kind-tag').length;`);
-check('好题本·题库：切「全部」能看到两本书并标出来源', commonCards === 10 && kindTags === 10, `${commonCards} 张，${kindTags} 个来源标签`);
+const allCount = (await (await fetch(`${APP}/api/questions`)).json()).problems.length;
+check(
+  '好题本·题库：切「全部」能看到两本书并标出来源',
+  commonCards === allCount && kindTags === allCount,
+  `${commonCards} 张，${kindTags} 个来源标签（题库共 ${allCount}）`
+);
 
 // 好题页里点东西不应该跳回错题
 await s.js(`document.querySelector('.subtab[data-sub="dashboard"]').click();`);
@@ -307,6 +312,28 @@ check(
     goodPrompt.prompt.includes('不要写 `## 错因分析` 区块'),
   `${goodPrompt.prompt.length} 字，book=${goodPrompt.book}`
 );
+const promptRules = await api2('/api/prompt', {
+  method: 'POST',
+  body: JSON.stringify({ stems: ['求极限 test'], book: 'mistakes', category: '数学', subject: '高数', chapter: '极限' }),
+});
+check(
+  '增题提示词：大题要求写完整的标准解答过程',
+  promptRules.prompt.includes('完整标准过程') &&
+    promptRules.prompt.includes('以「解：」或「证明：」开头') &&
+    promptRules.prompt.includes('不许') &&
+    promptRules.prompt.includes('把过程挪到「解析」里只留一个结果'),
+  `${promptRules.prompt.length} 字`
+);
+check(
+  '增题提示词：考点标签要求「没有的直接新建」',
+  promptRules.prompt.includes('没有的考点就直接新建') && promptRules.prompt.includes('points:'),
+  '考点规则已写入'
+);
+check(
+  '增题提示词：打卡说明改成「任何结果都进遗忘曲线 + 次数不封顶」',
+  promptRules.prompt.includes('任何结果都会排进遗忘曲线') && promptRules.prompt.includes('次数不封顶'),
+  '打卡说明已更新'
+);
 check(
   '好题本·增题：提示词里带上了「自动归类到题型本」的要求',
   goodPrompt.prompt.includes('归类到「题型本」') && goodPrompt.prompt.includes('good:<文件名去掉.md>'),
@@ -323,7 +350,8 @@ const badDetect = await api2('/api/detect', {
 });
 check(
   '好题本·增题：编号按好题本单独排（两本互不干扰）',
-  goodDetect.items[0]?.num === 1 && badDetect.items[0]?.num === 9,
+  goodDetect.items[0]?.num === 1 && badDetect.items[0]?.num > 1 &&
+    badDetect.items[0]?.num !== goodDetect.items[0]?.num,
   `好题本 #${goodDetect.items[0]?.num} ／ 错题本 #${badDetect.items[0]?.num}`
 );
 await s.shot('19b-good-add');
@@ -529,7 +557,10 @@ const mathCard = await s.js(
   `var c=[...document.querySelectorAll('.category-card')].find(x=>x.querySelector('.cc-name').textContent.trim()==='数学');
    return c ? c.querySelector('.cc-count').textContent.trim()+' 题 | '+c.querySelector('.cc-chapters').textContent.trim().slice(0,40) : 'NO';`
 );
-check('总览首页：数学卡显示题数与科目', mathCard.startsWith('10'), mathCard);
+const mathTotal = (await (await fetch(`${APP}/api/questions`)).json()).problems.filter(
+  (p) => p.category === '数学' && p.kind === 'mistakes'
+).length;
+check('总览首页：数学卡显示题数与科目', mathCard.startsWith(String(mathTotal)) && mathCard.includes('高数'), mathCard);
 await s.shot('01-home');
 
 /* ---------- 2. 进入数学 → 科目页 ---------- */
@@ -587,7 +618,10 @@ await s.js(
 );
 await sleep(1000);
 const limTotal = await s.js(`return document.querySelector('.stat-card .stat-value')?.textContent.trim();`);
-check('章节下钻：极限 8 题', limTotal === '8', `${limTotal} 题`);
+const limCount = (await (await fetch(`${APP}/api/questions`)).json()).problems.filter(
+  (p) => p.chapter === '极限' && p.kind === 'mistakes'
+).length;
+check('章节下钻：统计卡跟上「极限」这一章的题数', limTotal === String(limCount), `${limTotal} 题（题库里 ${limCount}）`);
 const btnPath = await s.js(`return document.querySelector('#scopeText').textContent.trim();`);
 check('范围选择器：按钮更新为三级路径', btnPath === '数学 › 高数 › 极限', btnPath);
 
@@ -596,7 +630,7 @@ await s.js(`document.querySelector('.subtab[data-sub="library"]').click();`);
 await sleep(800);
 await s.waitFor('.problem-grid');
 const libCards = await s.js(`return document.querySelectorAll('.problem-card').length;`);
-check('题库：跟随范围（极限 8 题）', libCards === 8, `${libCards} 张卡`);
+check('题库：跟随范围（只列「极限」这一章）', libCards === limCount, `${libCards} 张卡（应为 ${limCount}）`);
 const katexNodes = await s.js(`return document.querySelectorAll('.problem-grid .katex').length;`);
 check('题库：公式已 KaTeX 渲染', katexNodes > 0, `${katexNodes} 个节点`);
 const whereText = await s.js(`return document.querySelector('.pc-where')?.textContent.trim()||'';`);
@@ -652,6 +686,84 @@ const afterReason = await (await fetch(`${APP}/api/questions`)).json();
 const solved = afterReason.problems.find((x) => x.num === solveWho);
 check('做题模式：错因写进打卡记录', !!solved && solved.checkins.some((c) => c.reason === '计算失误'), solved ? solved.num : 'NO');
 check('做题模式：用时也记下了', !!solved && solved.checkins.some((c) => c.seconds > 0));
+
+/* ---------- 5.5 打卡次数不封顶 + 遗忘曲线语义 ---------- */
+const solveId = solved.id;
+const slotsBefore = await (await fetch(`${APP}/api/questions`)).json();
+const beforeFile = slotsBefore.problems.find((p) => p.id === solveId);
+const emptyBefore = beforeFile.checkins.filter((c) => !c.done).length;
+check('打卡：文件里始终预留多组空白位置（默认 3 组 = 9 行）', emptyBefore === 9, `${emptyBefore} 行空白`);
+// 连打 5 次（远超模板里的 3 次），每次都应该成功
+let lastAttempt = 0;
+for (let i = 0; i < 5; i++) {
+  const out = await api2('/api/checkin', {
+    method: 'POST',
+    body: JSON.stringify({ id: solveId, result: '失败', seconds: 30, reason: '计算失误' }),
+  });
+  lastAttempt = out.attempt;
+}
+check('打卡：次数不封顶（连打 5 次都记上了）', lastAttempt >= beforeFile.checkins.filter((c) => c.done).length + 5, `第 ${lastAttempt} 次`);
+const afterLoop = await (await fetch(`${APP}/api/questions`)).json();
+const looped = afterLoop.problems.find((p) => p.id === solveId);
+check(
+  '打卡：打完还是预留 3 组空白，可以一直勾',
+  looped.checkins.filter((c) => !c.done).length === 9,
+  `${looped.checkins.filter((c) => !c.done).length} 行空白`
+);
+// 失败 = 明天再来（不是今天到期），做了就算「已复习」
+check(
+  '遗忘曲线：刚失败的题算「已复习」，下次排到明天',
+  looped.stats.status === '已复习' && looped.stats.schedule.level === 0 && looped.stats.schedule.interval === 1,
+  `${looped.stats.status} · 第 ${looped.stats.schedule.level} 级 · ${looped.stats.schedule.interval} 天后`
+);
+// 完美两次 → 等级 1 → 2 次；再完美一次 → 等级 2
+const curve = await api2('/api/checkin', { method: 'POST', body: JSON.stringify({ id: solveId, result: '完美' }) });
+const c1 = await (await fetch(`${APP}/api/questions`)).json();
+const afterPerfect1 = c1.problems.find((p) => p.id === solveId);
+check(
+  '遗忘曲线：失败后做一次完美 → 等级 1、间隔 2 天',
+  afterPerfect1.stats.schedule.level === 1 && afterPerfect1.stats.schedule.interval === 2,
+  `第 ${afterPerfect1.stats.schedule.level} 级 · ${afterPerfect1.stats.schedule.interval} 天`
+);
+await api2('/api/checkin', { method: 'POST', body: JSON.stringify({ id: solveId, result: '完美' }) });
+const c2 = await (await fetch(`${APP}/api/questions`)).json();
+const afterPerfect2 = c2.problems.find((p) => p.id === solveId);
+check(
+  '遗忘曲线：第二次完美 → 等级 2、间隔 4 天（越掌握隔得越久）',
+  afterPerfect2.stats.schedule.level === 2 && afterPerfect2.stats.schedule.interval === 4,
+  `第 ${afterPerfect2.stats.schedule.level} 级 · ${afterPerfect2.stats.schedule.interval} 天`
+);
+// 「续上打卡位置」：位置够用时不动文件；在 Obsidian 里勾完了能一键续上
+const enough = await api2('/api/checkin-slots', { method: 'POST', body: JSON.stringify({ id: solveId }) });
+check('打卡：位置够用时「续上」不会重复写', enough.added === 0, `added=${enough.added}`);
+const beforeTopUp = (await (await fetch(`${APP}/api/questions`)).json()).problems.find((p) => p.id === solveId);
+const doneBeforeTopUp = beforeTopUp.checkins.filter((c) => c.done).length;
+const raw = fs.readFileSync(beforeTopUp.absPath, 'utf8');
+fs.writeFileSync(beforeTopUp.absPath, raw.replace(/^- \[ \] 第 .*$/gm, '').replace(/\n{3,}/g, '\n\n'), 'utf8');
+const topped = await api2('/api/checkin-slots', { method: 'POST', body: JSON.stringify({ id: solveId }) });
+check('打卡：空白位置用完后能一键续上 3 组', topped.added === 3, `续上 ${topped.added} 组`);
+const toppedQ = await (await fetch(`${APP}/api/questions`)).json();
+const toppedP = toppedQ.problems.find((p) => p.id === solveId);
+check(
+  '打卡：续完之后还是 9 行空白，历史记录一条没丢',
+  toppedP.checkins.filter((c) => !c.done).length === 9 &&
+    toppedP.checkins.filter((c) => c.done).length === doneBeforeTopUp,
+  `${toppedP.checkins.filter((c) => !c.done).length} 空 / ${toppedP.checkins.filter((c) => c.done).length} 已记（原 ${doneBeforeTopUp}）`
+);
+
+// 在 Obsidian 里手勾（没有日期）也算「已复习」，只是不会乱排期
+const beforeTick = fs.readFileSync(toppedP.absPath, 'utf8');
+fs.writeFileSync(
+  toppedP.absPath,
+  beforeTick.replace(/- \[ \] 第 (\d+) 次 · 完美\n/, '- [x] 第 $1 次 · 完美\n'),
+  'utf8'
+);
+const ticked = (await (await fetch(`${APP}/api/questions`)).json()).problems.find((p) => p.id === solveId);
+check(
+  '打卡：在 Obsidian 里手勾（没有日期）也算「已复习」，排期仍按有日期的那条走',
+  ticked.stats.status === '已复习' && ticked.stats.schedule.level === 2,
+  `${ticked.stats.status} · 等级 ${ticked.stats.schedule.level}`
+);
 
 await s.js(`location.hash='#mistakes/library';`);
 await sleep(900);
@@ -774,9 +886,9 @@ check(
 /* ---------- 6.5 遗忘曲线 + 用时分析 ---------- */
 const detail = await (await fetch(`${APP}/api/stats`)).json();
 check(
-  '遗忘曲线：刚做完完美的题进入「完成」并排了下一次',
-  detail.totals.done >= 1,
-  `完成 ${detail.totals.done} 题`
+  '遗忘曲线：做过的题都算「已复习」并排了下一次',
+  detail.totals.done >= 1 && detail.totals.due >= 1,
+  `已复习 ${detail.totals.done} · 待复习 ${detail.totals.due}`
 );
 
 // 回到全库范围的总览，才能看到「函数」那道到期题
@@ -799,7 +911,7 @@ await s.js(`document.querySelector('.subtab[data-sub="add"]').click();`);
 await s.waitFor('#addStem');
 await s.js(
   `var t=document.getElementById('addStem');
-   t.value='计算 $\\\\lim_{x\\\\to 0}\\\\dfrac{\\\\tan x - x}{x^{3}}$\\n---\\n简述进程调度算法中的时间片轮转法';
+   t.value='用等价无穷小计算 $\\\\lim_{x\\\\to 0}\\\\dfrac{\\\\tan x - x}{x^{3}}$\\n---\\n简述进程调度算法中的时间片轮转法';
    t.dispatchEvent(new Event('input',{bubbles:true}));`
 );
 await s.js(`document.querySelector('[data-add="parse"]').click();`);
@@ -811,6 +923,17 @@ const items = await s.js(
      ch:n.querySelector('[data-field="chapter"]').value }));`
 );
 check('增题：识别出 2 道题', items.length === 2, `${items.length} 道`);
+const addPointFields = await s.js(
+  `return [...document.querySelectorAll('.add-item [data-field="points"]')].map(x=>x.value);`
+);
+check('增题：每题都有「考点」字段', addPointFields.length === 2, addPointFields.join(' ／ '));
+check(
+  '增题：题干里出现过的已有考点会自动勾上',
+  addPointFields.some((v) => v.includes('等价无穷小')),
+  addPointFields[0] || '(空)'
+);
+const addPointOptions = await s.js(`return document.querySelectorAll('#pointList option').length;`);
+check('增题：考点输入框能补全已有考点', addPointOptions >= 1, `${addPointOptions} 个候选`);
 check(
   '增题：第一题归到 数学/高数/极限',
   items[0]?.cat === '数学' && items[0]?.sub === '高数' && items[0]?.ch === '极限',
@@ -848,6 +971,16 @@ check(
 );
 await api2('/api/uploads', { method: 'DELETE', body: JSON.stringify({}) });
 
+// 手填一个新考点（紧挨着写入，中间的重渲染不会把值冲掉）
+await s.js(
+  `var i=document.querySelectorAll('.add-item [data-field="points"]')[0];
+   i.value = i.value ? i.value + '、E2E新考点' : 'E2E新考点';
+   i.dispatchEvent(new Event('input',{bubbles:true}));`
+);
+const pointPreview = await s.js(
+  `return document.querySelectorAll('.add-item [data-field="points"]')[0]?.value || '';`
+);
+check('增题：考点框里能填新考点（预备写盘）', pointPreview.includes('E2E新考点'), pointPreview);
 const before = (await (await fetch(`${APP}/api/questions`)).json()).problems.length;
 await s.js(`document.querySelector('[data-add="create"]').click();`);
 await sleep(1800);
@@ -857,6 +990,17 @@ const os8 = afterDoc.tree.find((c) => c.name === '408');
 check('增题：408 / 操作系统 目录已自动创建', !!os8 && os8.total === 1, os8 ? `408 共 ${os8.total} 题` : '没有 408');
 const newFile = afterDoc.problems.find((p) => p.category === '408');
 check('增题：新题可被解析并带完整骨架', !!newFile && newFile.warnings.length === 0, newFile ? newFile.relPath : 'NO');
+const newPointed = afterDoc.problems.find((p) => (p.points || []).includes('E2E新考点'));
+check(
+  '考点：新加的考点会写进骨架并自动出现在题库标签里',
+  !!newPointed && afterDoc.problems.flatMap((p) => p.points).includes('E2E新考点'),
+  newPointed ? `${newPointed.num} → ${newPointed.points.join('、')}` : '没写进去'
+);
+check(
+  '考点：识别不到考点时不乱写，等 AI 写题时补',
+  !!newFile && Array.isArray(newFile.points) && newFile.points.length === 0,
+  newFile ? `points = ${(newFile.points || []).join('、') || '(空，符合预期)'}` : 'NO'
+);
 
 /* ---------- 7.5 还原被改动的计划文件 ---------- */
 const finalPlan = await (await fetch(`${APP}/api/plan?rel=${encodeURIComponent(planPath)}`)).json();

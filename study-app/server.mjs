@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, updatePoints, updateReason,
-  exportAll, saveUpload, listUploads, deleteUploads, promptForImages,
+  exportAll, saveUpload, listUploads, deleteUploads, promptForImages, topUpCheckins,
   patternsSnapshot, patternPrompt, readRaw, readAsset, resolveNote, APP_DIR,
 } from './lib/notebook.mjs';
 import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.mjs';
@@ -397,6 +397,12 @@ async function main() {
         const body = await readBody(req);
         const out = updatePoints(cfg, body.id, body.points);
         sendJson(res, 200, out);
+        return;
+      }
+
+      if (p === '/api/checkin-slots' && req.method === 'POST') {
+        const body = await readBody(req);
+        sendJson(res, 200, topUpCheckins(cfg, body.id));
         return;
       }
 

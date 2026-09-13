@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { scanNotebook, buildTree, today } from './parse.mjs';
 import { walkMarkdown } from './vault.mjs';
 import { computeStats, filterByScope } from './stats.mjs';
-import { recordCheckin, undoCheckin, setMeta, setPoints, setReason, backup } from './write.mjs';
+import { recordCheckin, undoCheckin, setMeta, setPoints, setReason, backup, ensureCheckinSlots } from './write.mjs';
 import {
   chapterOptions, createQuestions, splitProblems, detect as detectByKeywords, detectType,
   normalizeMath, slugOf, buildPrompt, buildImagePrompt, nextNumber as nextNumberFor, bookOf,
@@ -133,6 +133,17 @@ export function checkin(cfg, id, result, date, seconds, reason) {
   return { ok: true, ...res, problem: findProblem(cfg, id) };
 }
 
+/** 续上空白的打卡位置（在 Obsidian 里手动勾完了，点一下继续） */
+export function topUpCheckins(cfg, id) {
+  const p = findProblem(cfg, id);
+  if (p.warnings.some((w) => w.includes('打卡记录'))) {
+    throw Object.assign(new Error('该笔记缺少 `## 打卡记录` 区块，为防误写已中止'), { status: 409 });
+  }
+  backup(p.absPath, bookRootOf(cfg, p.kind), cfg.backupDir);
+  const res = ensureCheckinSlots(p.absPath);
+  return { ok: true, ...res, problem: findProblem(cfg, id) };
+}
+
 export function undo(cfg, id, attempt, result) {
   const p = findProblem(cfg, id);
   backup(p.absPath, cfg.notebookDir, cfg.backupDir);
@@ -173,6 +184,8 @@ export function updatePoints(cfg, id, points) {
 /** 只做识别与预览，不写盘 */
 export function detect(cfg, raw, mode = 'rule', book = 'mistakes') {
   const bookRoot = bookRootOf(cfg, book);
+  // 已有的考点标签：题干里出现过的先自动勾上（新考点由你填或由 AI 写题时新建）
+  const knownPoints = [...new Set(snapshot(cfg).problems.flatMap((p) => p.points || []))];
   const parts = splitProblems(raw, mode);
   const items = parts.map((stem, index) => {
     const guessed = detectByKeywords(stem);
@@ -185,6 +198,7 @@ export function detect(cfg, raw, mode = 'rule', book = 'mistakes') {
       confidence: guessed.confidence,
       type: detectType(stem),
       slug: slugOf(stem),
+      points: knownPoints.filter((pt) => pt && stem.includes(pt)),
       num: null,
     };
   });

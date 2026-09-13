@@ -67,7 +67,7 @@ export function scanPatterns(patternDir, vaultDir, problems = []) {
       return s.levelMax ? s.level / s.levelMax : 0;
     });
     const mastery = levels.length ? Math.round((levels.reduce((a, b) => a + b, 0) / levels.length) * 100) : null;
-    const doneCount = linked.filter((p) => p.stats.status === '完成').length;
+    const doneCount = linked.filter((p) => p.stats.status === '已复习').length;
     const failCount = linked.reduce((s, p) => s + p.stats.fail, 0);
 
     // 通解正文里的几个小节（按 `## ` 切，别用带 m 标志的 $ —— 那会在行尾就截断）

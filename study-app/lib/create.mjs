@@ -61,11 +61,19 @@ const DIFF_WORD = { 1: '送分', 2: '基础', 3: '中档', 4: '较难', 5: '压�
 const HEAT_WORD = { 1: '极少单独考', 2: '低频', 3: '中频', 4: '高频', 5: '超高频' };
 
 /** 生成一篇骨架笔记 */
-export function renderNote({ subject, chapter, num, slug, stem, type, difficulty = 3, heat = 3, title, reason, kind = 'mistakes' }) {
+export function renderNote({
+  subject, chapter, num, slug, stem, type, difficulty = 3, heat = 3,
+  title, reason, kind = 'mistakes', points = [],
+}) {
   const pad = String(num).padStart(2, '0');
   const stars = '⭐'.repeat(difficulty) + '☆'.repeat(5 - difficulty);
   const fires = '🔥'.repeat(heat) + '☆'.repeat(5 - heat);
   const headline = title || slug;
+  const pointList = (Array.isArray(points) ? points : String(points || '').split(/[、,，;；\s]+/))
+    .map((x) => String(x).trim())
+    .filter(Boolean);
+  // 考点标签：写题时定的就先写进去；没有就不写这个键，等 AI 写题时补（新考点该建就建）
+  const pointsBlock = pointList.length ? `points:\n${pointList.map((x) => `  - ${x}`).join('\n')}\n` : '';
 
   return `---
 tags:
@@ -75,7 +83,7 @@ tags:
 type: ${type}
 difficulty: ${stars}
 heat: ${fires}
----
+${pointsBlock}---
 
 # ${chapter}-${pad}　${headline}
 
@@ -95,12 +103,12 @@ ${stem}
 ## 答案
 
 > [!success]- 展开 · 答案
-> ⏳ 待补充
+> ⏳ 待补充（小题给最终结果；大题要给考场上那种完整标准过程：以「解：」开头、每步写清依据、结尾出结论）
 
 ## 解析
 
 > [!example]- 展开 · 解析
-> ⏳ 待补充
+> ⏳ 待补充（只写思路与易错点，不要重复答案里的过程）
 
 > [!warning]- 展开 · 易错提醒
 > ⏳ 待补充
@@ -112,8 +120,10 @@ ${kind === 'good' ? '' : `## 错因分析
 
 `}## 打卡记录
 
-> 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。
-${kind === 'good' ? '' : '> 做错的记一下错因，程序会统计你到底是怎么错的。\n'}
+> 做完一次勾一个结果（每次只勾一个）。**任何结果都会排进遗忘曲线**：
+> 完美 → 间隔变长；普通 → 间隔缩短；失败 → 打回第 0 级，今天就要再来一遍。
+${kind === 'good' ? '' : '> 做错的记一下错因，程序会统计你到底是怎么错的。\n'}> 次数不封顶 —— 一直不会就一直勾。勾完了在程序里打卡会自动往下续，
+> 在 Obsidian 里勾完也可以直接复制一组（\`- [ ] 第 N 次 · 完美\` 三行）。
 
 - [ ] 第 1 次 · 完美
 - [ ] 第 1 次 · 普通
@@ -176,6 +186,7 @@ export function createQuestions(rootDir, items, kind = 'mistakes') {
       title: item.title,
       reason: item.reason,
       kind,
+      points: item.points,
     });
     fs.writeFileSync(file, body, 'utf8');
     created.push({
@@ -217,9 +228,16 @@ export function bookOf(book) {
 /** 生成一段可以直接丢给 AI 的提示词（按「哪一本」生成：错题本 / 好题本） */
 export function buildPrompt(
   stems,
-  { book = 'mistakes', category, subject, chapter, reason, intro, patterns = [], noteDirs = [] } = {}
+  {
+    book = 'mistakes', category, subject, chapter, reason, intro,
+    patterns = [], noteDirs = [], knownPoints = [],
+  } = {}
 ) {
   const bk = bookOf(book);
+  // 已有的考点标签只作提示：新考点该建就建，不要为了迁就旧标签而硬塞
+  const pointHint = knownPoints.length
+    ? `题库里现在有：${knownPoints.slice(0, 40).join('、')}${knownPoints.length > 40 ? ' …' : ''}`
+    : '题库里现在还没有考点标签';
   const body = stems.map((s, i) => `【第 ${i + 1} 题】\n${s}`).join('\n\n');
   const hint = [category, subject, chapter].filter(Boolean).join(' / ');
   const reasonLine =
@@ -267,6 +285,8 @@ tags:
 type: <题型>
 difficulty: <五格，用 ☆ 补满，如 ⭐⭐⭐☆☆>
 heat: <五格，用 ☆ 补满，如 🔥🔥🔥🔥☆>
+points:
+  - <考点标签，见下面「考点标签」一节的规则>
 ---
 
 # <章节名>-<两位编号>　<用 LaTeX 写的核心式子>
@@ -291,11 +311,12 @@ heat: <五格，用 ☆ 补满，如 🔥🔥🔥🔥☆>
 ## 答案
 
 > [!success]- 展开 · 答案
-> <最终结果>
+> <见下面「答案怎么写」：小题给最终结果，大题给完整标准过程>
 
 ## 解析
 
 > [!example]- 展开 · 解析
+> **思路**　<一两句：怎么想到走这条路>
 > **第 1 步：** …
 
 > [!warning]- 展开 · 易错提醒
@@ -303,8 +324,11 @@ heat: <五格，用 ☆ 补满，如 🔥🔥🔥🔥☆>
 
 ${reasonBlock}## 打卡记录
 
-> 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。
+> 做完一次勾一个结果（每次只勾一个）。**任何结果都会排进遗忘曲线**：
+> 完美 → 间隔变长；普通 → 间隔缩短；失败 → 打回第 0 级，**今天就要再来一遍**。
 ${bk.key === 'good' ? '' : '> 做错的记一下错因，程序会统计你到底是怎么错的。\n'}
+> 次数不封顶 —— 一直不会就一直勾。这里先给 3 次的位置，在程序里打卡会自动往下续，
+> 在 Obsidian 里手动勾完了就照着复制一组（\`- [ ] 第 N 次 · 完美 / 普通 / 失败\`）。
 
 - [ ] 第 1 次 · 完美
 - [ ] 第 1 次 · 普通
@@ -317,6 +341,28 @@ ${bk.key === 'good' ? '' : '> 做错的记一下错因，程序会统计你到�
 - [ ] 第 3 次 · 完美
 - [ ] 第 3 次 · 普通
 - [ ] 第 3 次 · 失败
+
+## 答案怎么写（重要）
+
+**小题（选择 / 填空 / 只有一问的计算）**：答案块里给**最终结果**，一行够；再补一句校验（如「代入 $x=0$ 两边都得 1」）。
+
+**大题（解答题 / 证明题 / 多问综合题）**：答案块里必须是**考场上写在答题卡上的完整标准过程**，不是提要、不是思路、不是你自己发明的格式：
+
+1. 以「解：」或「证明：」开头；有多问就写「（Ⅰ）」「（Ⅱ）」。
+2. **一步一步写全**，每一步都是可判分的式子，并写明依据（用了哪个定理 / 公式 / 等价无穷小 / 洛必达条件）。
+3. 行间公式用 \`$$…$$\` 单独成段；不要把整段推导塞进一行。
+4. 该写的前提不能省：定义域、正负号、$x\to\infty$ 还是 $x\to-\infty$、洛必达前先说明满足条件、分类讨论要把每种情况写全。
+5. 结尾给出明确结论（如「综上，$\lim\limits_{x\to0}\dfrac{\sin x-x}{x^{3}}=-\dfrac{1}{6}$」）。
+6. **不许**用「显然」「易得」「由上式可得」把关键步骤糊过去；**不许**自创记号（用教材/考研通用的记号）；**不许**把过程挪到「解析」里只留一个结果。
+
+**「解析」块不要重复答案**：那里只写「思路怎么来的 + 每步为什么这么走 + 容易错在哪」。
+
+## 考点标签（points）怎么写
+
+- 每题 **2–5 个**，写在 frontmatter 的 \`points:\` 里，**一行一个**。
+- 标签是「这道题考的知识点 + 解法特征」，例如：\`1的无穷大型\`、\`等价无穷小\`、\`根式有理化\`、\`左右极限\`、\`夹逼准则\`、\`单调有界准则\`、\`矩阵的秩\`、\`页面置换算法\`。
+- **没有的考点就直接新建**，不要为了迁就已有标签而硬塞。可以复用已有标签（${pointHint}），但**不限于这些**。
+- 每个标签 ≤ 12 个字，用名词短语，不要写整句话，不要带标点。
 
 硬性要求：
 1. 正文开头只显示三行（考的类型 / 难度 / 考研热度）；考点、难点、答案、解析、易错提醒**全部折叠**（\`> [!xxx]-\` 里的 \`-\` 表示默认收起）。

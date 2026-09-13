@@ -9,16 +9,16 @@
 import { RESULTS } from './parse.mjs';
 import { today } from './parse.mjs';
 
-const STATUS_LABEL = { 完成: '✅ 复习完成', 进行中: '⏳ 待复习·做过', 未做: '⏳ 待复习·未做' };
+const STATUS_LABEL = { 已复习: '✅ 已复习', 待复习: '⏳ 待复习', 未做: '⭕ 未做' };
 
 export function statusLabel(status) {
   return STATUS_LABEL[status] || status;
 }
 
-/** 复习优先级：到期最优先，其次热度、难度、失败次数 */
+/** 复习优先级：到期的最优先，其次热度、难度、失败次数 */
 export function priorityOf(p) {
   const overdue =
-    p.stats.status === '到期' ? 3 + Math.min(p.stats.schedule?.overdue || 0, 14) * 0.2 : 0;
+    p.stats.status === '待复习' ? 3 + Math.min(p.stats.schedule?.overdue || 0, 14) * 0.2 : 0;
   return p.heat * 2 + p.difficulty - p.stats.total * 0.5 + (p.stats.fail > 0 ? 1.5 : 0) + overdue;
 }
 
@@ -40,7 +40,7 @@ function groupCount(problems, keyFn, keys) {
     if (!out.has(k)) out.set(k, { key: k, total: 0, done: 0, pending: 0 });
     const row = out.get(k);
     row.total += 1;
-    if (p.stats.status === '完成') row.done += 1;
+    if (p.stats.status === '已复习') row.done += 1;
     else row.pending += 1;
   }
   return [...out.values()];
@@ -48,8 +48,9 @@ function groupCount(problems, keyFn, keys) {
 
 export function computeStats(problems, tree = []) {
   const total = problems.length;
-  const done = problems.filter((p) => p.stats.status === '完成').length;
-  const started = problems.filter((p) => p.stats.status === '进行中').length;
+  // 已复习 = 做过（不管对没对），下一次已经排进遗忘曲线
+  const done = problems.filter((p) => p.stats.status === '已复习').length;
+  const due = problems.filter((p) => p.stats.status === '待复习').length;
   const untouched = problems.filter((p) => p.stats.status === '未做').length;
 
   const checkinsAll = problems.flatMap((p) => p.checkins.filter((c) => c.done));
@@ -83,7 +84,7 @@ export function computeStats(problems, tree = []) {
   }
 
   const pending = problems
-    .filter((p) => p.stats.status !== '完成')
+    .filter((p) => p.stats.status !== '已复习')
     .map((p) => ({ ...p, priority: priorityOf(p) }))
     .sort((a, b) => b.priority - a.priority);
 
@@ -109,9 +110,9 @@ export function computeStats(problems, tree = []) {
     totals: {
       total,
       done,
-      started,
+      due,
       untouched,
-      pending: started + untouched,
+      pending: due + untouched,
       checkins: checkinsAll.length,
       byResult,
       completionRate: total ? Math.round((done / total) * 100) : 0,
@@ -129,7 +130,7 @@ export function computeStats(problems, tree = []) {
     byReason: reasonStats(problems),
     timing: timingStats(problems),
     due: problems
-      .filter((p) => p.stats.status === '到期')
+      .filter((p) => p.stats.status === '待复习')
       .sort((a, b) => b.stats.schedule.overdue - a.stats.schedule.overdue)
       .map(slim),
     // 大类 / 科目的地板数据（含 0 题的科目），给导航和上层总览用
@@ -142,7 +143,7 @@ export function computeStats(problems, tree = []) {
 }
 
 /**
- * 考点标签统计：每个标签下有多少题、其中多少完成、累计失败几次。
+ * 考点标签统计：每个标签下有多少题、其中多少已复习、累计失败几次。
  * 「失败次数」是找薄弱点最直接的信号。
  */
 function pointStats(problems) {
@@ -152,7 +153,7 @@ function pointStats(problems) {
       if (!map.has(point)) map.set(point, { key: point, total: 0, done: 0, pending: 0, fail: 0, checkins: 0, ids: [] });
       const row = map.get(point);
       row.total += 1;
-      if (p.stats.status === '完成') row.done += 1;
+      if (p.stats.status === '已复习') row.done += 1;
       else row.pending += 1;
       row.fail += p.stats.fail;
       row.checkins += p.stats.total;

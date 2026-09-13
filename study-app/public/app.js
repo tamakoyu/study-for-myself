@@ -57,11 +57,11 @@ const REASONS = ['概念不清', '方法不会', '思路方向错', '计算失�
 
 const PALETTE = ['#6d8cff', '#3fb950', '#e3b341', '#f85149', '#a371f7', '#39c5cf', '#ff8c42'];
 
+// 三种状态：做了就「已复习」并按遗忘曲线排下一次；到日子自动变「待复习」
 const STATUS_META = {
-  到期: { cls: 'badge-due', text: '⏰ 该复习了', cls2: 's-due' },
-  完成: { cls: 'badge-done', text: '✅ 复习完成', cls2: 's-done' },
-  进行中: { cls: 'badge-start', text: '⏳ 待复习·做过', cls2: 's-start' },
-  未做: { cls: 'badge-none', text: '⏳ 待复习·未做', cls2: 's-none' },
+  待复习: { cls: 'badge-due', text: '⏰ 待复习', cls2: 's-due' },
+  已复习: { cls: 'badge-done', text: '✅ 已复习', cls2: 's-done' },
+  未做: { cls: 'badge-none', text: '⭕ 未做', cls2: 's-none' },
 };
 const statusMeta = (s) => STATUS_META[s] || STATUS_META['未做'];
 
@@ -376,15 +376,15 @@ function statCards(stats, extra = []) {
       <div class="stat-foot">${extra[0] || ''}</div>
     </div>
     <div class="stat-card is-done">
-      <div class="stat-label">✅ 复习完成</div>
+      <div class="stat-label">✅ 已复习</div>
       <div class="stat-value">${t.done}</div>
-      <div class="stat-foot">完成率 <b>${t.completionRate}%</b></div>
+      <div class="stat-foot">做过的题都排进了遗忘曲线 · <b>${t.completionRate}%</b></div>
       <div class="progress"><i style="width:${t.completionRate}%"></i></div>
     </div>
     <div class="stat-card is-pending">
       <div class="stat-label">⏳ 待复习</div>
       <div class="stat-value">${t.pending}</div>
-      <div class="stat-foot">做过但没完美 <b>${t.started}</b> · 一次没做 <b>${t.untouched}</b></div>
+      <div class="stat-foot">到日子了 <b>${t.due}</b> · 一次没做 <b>${t.untouched}</b></div>
     </div>
     <div class="stat-card is-streak">
       <div class="stat-label">累计打卡</div>
@@ -466,7 +466,7 @@ function subjectCards(node) {
         <span class="sc-count">${sub.total}<small>题</small></span></div>
       <div class="progress"><i style="width:${rate}%"></i></div>
       <div class="sc-foot">
-        <span>✅ 完成 <b>${sub.done}</b></span>
+        <span>✅ 已复习 <b>${sub.done}</b></span>
         <span>⏳ 待复习 <b>${sub.total - sub.done}</b></span>
         <span>占比 <b>${total ? Math.round((sub.total / total) * 100) : 0}%</b></span>
       </div>
@@ -482,9 +482,9 @@ function insightPanels(stats) {
 
   if (stats.due && stats.due.length) {
     parts.push(`<section class="panel" style="margin-top:14px">
-      <div class="panel-head"><h3>⏰ 遗忘曲线提醒</h3><span class="hint">做过的题按 1/2/4/7/15/30 天回到队列，这些已到点</span></div>
+      <div class="panel-head"><h3>⏰ 遗忘曲线提醒</h3><span class="hint">做过的题按掌握等级 1 / 2 / 4 / 7 / 15 / 30 / 60 天回到队列，这些已到点</span></div>
       <div class="table-wrap"><table class="data">
-        <thead><tr><th>题目</th><th>科目</th><th>章节</th><th>做到完美次数</th><th>当前间隔</th><th>已过期</th></tr></thead>
+        <thead><tr><th>题目</th><th>科目</th><th>章节</th><th>掌握等级</th><th>当前间隔</th><th>已过期</th></tr></thead>
         <tbody>${stats.due
           .map(
             (p) => `<tr data-open="${esc(p.id)}">
@@ -509,7 +509,7 @@ function insightPanels(stats) {
         stats.byPoint.untagged ? `　·　还有 ${stats.byPoint.untagged} 题没打考点` : ''
       }</span></div>
       <div class="table-wrap"><table class="data">
-        <thead><tr><th>考点</th><th>题数</th><th>已完成</th><th>累计失败</th><th>累计打卡</th></tr></thead>
+        <thead><tr><th>考点</th><th>题数</th><th>已复习</th><th>累计失败</th><th>累计打卡</th></tr></thead>
         <tbody>${pts
           .slice(0, 14)
           .map(
@@ -594,7 +594,7 @@ function renderDashboard() {
             <span class="cc-count">${c.total}<small>题</small></span>
           </div>
           <div class="progress"><i style="width:${rate}%"></i></div>
-          <div class="cc-foot"><span>✅ 完成 ${c.done}</span><span>⏳ 待复习 ${c.total - c.done}</span><span>${rate}%</span></div>
+          <div class="cc-foot"><span>✅ 已复习 ${c.done}</span><span>⏳ 待复习 ${c.total - c.done}</span><span>${rate}%</span></div>
           <div class="cc-chapters">${c.children.map((s) => `${esc(s.name)} <em>${s.total}</em>`).join(' ／ ') || '<em>还没有科目</em>'}</div>
           <div class="cc-enter">进入 ${esc(c.name)} 总览 →</div>
         </article>`;
@@ -617,7 +617,7 @@ function renderDashboard() {
           )}${legend(cat.children.map((s) => ({ key: s.name, total: s.total })))}</div></div>
         </section>
         <section class="panel">
-          <div class="panel-head"><h3>各科目完成情况</h3><span class="hint">✅ 已完成 / 总题数</span></div>
+          <div class="panel-head"><h3>各科目复习情况</h3><span class="hint">✅ 已复习 / 总题数</span></div>
           <div class="panel-body">${barRows(
             cat.children.map((s) => ({ key: s.name, total: s.done })),
             (k) => esc(k),
@@ -717,8 +717,8 @@ function renderLibrary() {
     )}
     ${filterChips('复习状态', [
       { value: null, text: '全部', count: scopedAll.length },
-      { value: '完成', text: '✅ 已完成', count: countIn((p) => p.stats.status === '完成') },
-      { value: '进行中', text: '⏳ 做过', count: countIn((p) => p.stats.status === '进行中') },
+      { value: '已复习', text: '✅ 已复习', count: countIn((p) => p.stats.status === '已复习') },
+      { value: '待复习', text: '⏳ 待复习', count: countIn((p) => p.stats.status === '待复习') },
       { value: '未做', text: '⭕ 未做', count: countIn((p) => p.stats.status === '未做') },
     ], 'status')}
     ${filterChips('难度', [
@@ -843,8 +843,8 @@ function renderDrawer(id) {
       <span class="meta-item">累计打卡 <b>${p.stats.total}</b> 次</span>
       ${
         p.stats.schedule
-          ? `<span class="meta-item">忘记曲线 <b class="${p.stats.schedule.isDue ? 'is-due' : ''}">${esc(
-              scheduleText(p)
+          ? `<span class="meta-item">遗忘曲线 <b class="${p.stats.schedule.isDue ? 'is-due' : ''}" title="掌握等级 ${p.stats.schedule.level}/${p.stats.schedule.levelMax}：等级越高，下一次隔得越久">${esc(
+              `第 ${p.stats.schedule.level} 级 · ${scheduleText(p)}`
             )}</b></span>`
           : ''
       }
@@ -876,6 +876,7 @@ function renderDrawer(id) {
     <section class="do-panel">
       <div class="drawer-actions">
         <button class="btn-ghost small" data-doc-open="${esc(p.vaultRel || p.relPath)}">📄 本题原文</button>
+        <button class="btn-ghost small" data-topup="${esc(p.id)}" title="在 Obsidian 里把打卡位置勾完了，点这里再续几组">➕ 续上打卡位置</button>
       </div>
       <button class="btn-primary big" data-solve-start="${esc(p.id)}">▶ 开始做题（全屏）</button>
       <div class="do-hint">进全屏做题模式：解析和错因都会藏起来，做完在那边打卡。</div>
@@ -972,10 +973,10 @@ function refreshDrawer() {
    复习模式
    ============================================================ */
 const REVIEW_SCOPES = [
-  { key: 'pending', label: '只抽待复习', hint: '还没做到「完美」的题' },
+  { key: 'pending', label: '只抽待复习', hint: '到日子该再做的 + 一次没做过的' },
   { key: 'troubled', label: '只抽失败过', hint: '错得最狠的那几道' },
   { key: 'all', label: '全部题目', hint: '完整过一遍' },
-  { key: 'done', label: '只抽已完成', hint: '巩固保温' },
+  { key: 'done', label: '只抽已复习', hint: '巩固保温' },
 ];
 const REVIEW_ORDERS = [
   { key: 'priority', label: '按优先级', hint: '热度高、失败过的排前面' },
@@ -985,9 +986,9 @@ const REVIEW_ORDERS = [
 const REVIEW_COUNTS = [5, 10, 20, 'all'];
 
 function scopeMatch(p, scope) {
-  if (scope === 'pending') return p.stats.status !== '完成';
+  if (scope === 'pending') return p.stats.status !== '已复习';
   if (scope === 'troubled') return p.stats.fail > 0;
-  if (scope === 'done') return p.stats.status === '完成';
+  if (scope === 'done') return p.stats.status === '已复习';
   return true;
 }
 
@@ -1528,6 +1529,7 @@ function renderAdd() {
           <label>章节 <input data-field="chapter" value="${esc(it.chapter)}" list="chList"></label>
           <label>编号 <input data-field="num" value="${it.num}" size="3"></label>
           <label class="grow">短标题 <input data-field="slug" value="${esc(it.slug)}"></label>
+          <label class="grow">考点 <input data-field="points" value="${esc((it.points || []).join('、'))}" list="pointList" placeholder="用、隔开，没有的会自动新建"></label>
           <label>题型 <input data-field="type" value="${esc(it.type)}"></label>
           <label>难度 <select data-field="difficulty">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${'⭐'.repeat(n)}</option>`).join('')}</select></label>
           <label>热度 <select data-field="heat">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${'🔥'.repeat(n)}</option>`).join('')}</select></label>
@@ -1543,7 +1545,10 @@ function renderAdd() {
          .join('')}</div>`
     : '';
 
-  const dl = `<datalist id="catList">${state.data.taxonomy ? Object.keys(state.data.taxonomy).map((c) => `<option value="${esc(c)}">`).join('') : ''}</datalist>
+  const dl = `<datalist id="pointList">${allPoints()
+    .map((pt) => `<option value="${esc(pt)}"></option>`)
+    .join('')}</datalist>
+    <datalist id="catList">${state.data.taxonomy ? Object.keys(state.data.taxonomy).map((c) => `<option value="${esc(c)}">`).join('') : ''}</datalist>
     <datalist id="subList">${state.data.options ? [...new Set(state.data.options.map((o) => o.subject))].map((s) => `<option value="${esc(s)}">`).join('') : ''}</datalist>
     <datalist id="chList">${state.data.options ? [...new Set(state.data.options.map((o) => o.chapter))].map((c) => `<option value="${esc(c)}">`).join('') : ''}</datalist>`;
 
@@ -1639,6 +1644,15 @@ function collectAddItems() {
       difficulty: Number(get('difficulty')) || 3,
       heat: Number(get('heat')) || 3,
       reason: get('reason'),
+      // 考点：用、/，/空格分开；没有的标签直接新建
+      points: [
+        ...new Set(
+          get('points')
+            .split(/[、,，;；\s]+/)
+            .map((x) => x.trim())
+            .filter(Boolean)
+        ),
+      ],
       stem: state.add.items[Number(node.dataset.index)]?.stem || '',
     };
   });
@@ -2122,7 +2136,7 @@ function renderToday() {
           }
           ${
             m.total != null
-              ? `<div class="prog-row"><span>错题掌握</span>
+              ? `<div class="prog-row"><span>错题已复习</span>
                    <div class="progress"><i style="width:${m.rate}%"></i></div>
                    <b>${m.done}/${m.total}　${m.rate}%</b></div>`
               : ''
@@ -2959,6 +2973,9 @@ function bindEvents() {
     const dopen2 = e.target.closest('[data-doc-open]');
     if (dopen2) return openDoc(dopen2.dataset.docOpen);
 
+    const topup = e.target.closest('[data-topup]');
+    if (topup) return topUpCheckins(topup.dataset.topup);
+
     const c = e.target.closest('[data-checkin]');
     if (c) return doCheckin(c.dataset.id, c.dataset.checkin, c);
     const u = e.target.closest('[data-undo]');
@@ -3057,6 +3074,20 @@ function goSolve(id) {
   const h = buildHash({ module: book, sub: 'solve', solveId: id });
   if (location.hash === h) applyHash();
   else location.hash = h;
+}
+
+/** 续上空白打卡位置（次数不封顶） */
+async function topUpCheckins(id) {
+  try {
+    const out = await api('/api/checkin-slots', { method: 'POST', body: JSON.stringify({ id }) });
+    await reload({ silent: true });
+    toast(
+      out.added > 0 ? `已续上 ${out.added} 组打卡位置（第 4、5、6 次这样的）` : '打卡位置还够用，不用续',
+      'ok'
+    );
+  } catch (err) {
+    toast(`续不上：${err.message}`, 'err');
+  }
 }
 
 /** 保存「首次错因」 */

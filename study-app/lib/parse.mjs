@@ -33,9 +33,11 @@ const REASON_LINE_RE = /^(?:>\s*)?\*\*首次错因\*\*\s*[　\s]*(.*)$/m;
 
 /**
  * 遗忘曲线间隔（天），下标就是「掌握等级」：
- *   0 → 1 天（刚失败，明天再来）　1 → 2 天　2 → 4 天 … 6 → 60 天
- * 每做到一次「完美」升一级 → 越掌握，隔得越久；
- * 「普通」降一级 → 提醒得早一点；「失败」直接打回 0 级 → 最快提醒。
+ *   0 → 1 天　1 → 2 天　2 → 4 天 … 6 → 60 天
+ * 每做到一次「完美」升一级 → 越掌握，隔得越久；「普通」降一级 → 提醒得早一点。
+ * 「失败」打回 0 级 → 明天再来（艾宾浩斯最前面那一段）。
+ *
+ * 不管做对没做对，**做了就标记「已复习」并排下一次**；到日子了自动变成「待复习」。
  */
 export const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60];
 
@@ -213,6 +215,7 @@ export function summarize(checkins, nowStr = today()) {
       trail.push({ date: c.date, result: c.result, level });
     }
     const last = datedRecords[datedRecords.length - 1];
+    // 失败已经打回 0 级 → 间隔就是最短的 1 天；完美越多等级越高、间隔越长
     const interval = REVIEW_INTERVALS[level];
     const due = addDays(last.date, interval);
     const overdue = daysBetween(due, nowStr); // >0 已过期，=0 今天到期，<0 还没到
@@ -230,15 +233,18 @@ export function summarize(checkins, nowStr = today()) {
     };
   }
 
-  // 状态：没做过 / 到点了该复习 / 已掌握且没到期 / 做过但还没掌握
+  // 状态只有三种：
+  //   已复习 —— 做过了（不管对没对）
+  //   待复习 —— 到日子了，该再做了
+  //   未做   —— 一次都没做过
+  // 「做了」只要勾了就算（在 Obsidian 里手勾也算）；但**排期只认带日期的记录**
+  // —— 日期由程序写，手动勾的那次没有日期，所以不会乱排。
   const status =
     done.length === 0
       ? '未做'
       : schedule && schedule.isDue
-        ? '到期'
-        : perfect > 0 && schedule.lastResult === '完美'
-          ? '完成'
-          : '进行中';
+        ? '待复习'
+        : '已复习';
 
   // ── 用时 ──
   const secs = done.map((c) => c.seconds).filter((n) => typeof n === 'number' && n > 0);
@@ -390,7 +396,7 @@ export function buildTree(problems) {
   };
   const tag = (node, p) => {
     node.total += 1;
-    if (p.stats.status === '完成') node.done += 1;
+    if (p.stats.status === '已复习') node.done += 1;
   };
 
   // 先把「大类 / 科目」骨架铺好：哪怕 0 题，数学与 408 两个大页也始终存在。

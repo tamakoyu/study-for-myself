@@ -13,6 +13,9 @@ import { RESULTS, renderGauge, today } from './parse.mjs';
 const CHECKIN_LINE_RE =
   /^-\s*\[[xX]\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*(?:·\s*(\d{4}-\d{2}-\d{2}))?\s*(?:·\s*(\d+)\s*s)?\s*(?:·\s*错因[:：]\s*(.+?))?\s*$/;
 
+/** 还没勾的打卡行：`- [ ] 第 4 次 · 完美` */
+const CHECKIN_EMPTY_RE = /^-\s*\[\s*\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*$/;
+
 const PROFILE_LABEL = { type: '考的类型', difficulty: '难度', heat: '考研热度' };
 
 /** 写入前先备份，出问题能一键回滚 */
@@ -44,6 +47,9 @@ function findSection(lines, heading) {
   return { start, end };
 }
 
+/** 往后预留几组空白的打卡位置（不够可以随时续，次数不封顶） */
+export const CHECKIN_SLOTS = 3;
+
 /** 把打卡记录渲染成规范的 Markdown 区块 */
 export function renderCheckinBlock(checkins) {
   const done = (checkins || [])
@@ -52,7 +58,7 @@ export function renderCheckinBlock(checkins) {
   const maxAttempt = done.reduce((m, c) => Math.max(m, c.attempt), 0);
 
   const groups = [];
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= CHECKIN_SLOTS; i++) {
     const n = maxAttempt + i;
     groups.push(RESULTS.map((r) => `- [ ] 第 ${n} 次 · ${r}`).join('\n'));
   }
@@ -74,8 +80,10 @@ export function renderCheckinBlock(checkins) {
   return [
     '## 打卡记录',
     '',
-    '> 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。',
+    '> 做完一次勾一个结果（每次只勾一个）。**任何结果都会排进遗忘曲线**：',
+    '> 完美 → 间隔变长；普通 → 间隔缩短；失败 → 打回第 0 级，今天就要再来一遍。',
     '> 做错的记一下错因，程序会统计你到底是怎么错的。',
+    '> 次数不封顶 —— 一直不会就一直勾，程序每次打卡都会自动往下续。',
     '',
     parts.join('\n\n'),
     '',
@@ -120,6 +128,43 @@ export function recordCheckin(absPath, { result, date, seconds, reason }) {
   const next = [...lines.slice(0, range.start), ...block, ...lines.slice(range.end)];
   fs.writeFileSync(absPath, normalizeEof(next), 'utf8');
   return { attempt: nextAttempt, result };
+}
+
+/**
+ * 只补足空白的打卡位置（不动任何已有记录）。
+ * 在 Obsidian 里手动勾完最后一次后，点一下「续上打卡位置」就能继续勾。
+ */
+export function ensureCheckinSlots(absPath, minEmpty = CHECKIN_SLOTS) {
+  const text = fs.readFileSync(absPath, 'utf8');
+  const lines = text.split('\n');
+  const range = findSection(lines, '打卡记录');
+  if (!range) throw new Error('该笔记没有 `## 打卡记录` 区块');
+
+  const done = [];
+  let empty = 0;
+  for (let i = range.start + 1; i < range.end; i++) {
+    if (CHECKIN_EMPTY_RE.test(lines[i])) {
+      empty += 1;
+      continue;
+    }
+    const m = lines[i].match(CHECKIN_LINE_RE);
+    if (!m) continue;
+    done.push({
+      done: true,
+      attempt: Number(m[1]),
+      result: m[2],
+      date: m[3] || null,
+      seconds: m[4] ? Number(m[4]) : null,
+      reason: m[5] ? m[5].trim() : null,
+    });
+  }
+  const groups = Math.ceil(empty / RESULTS.length);
+  if (groups >= minEmpty) return { added: 0, empty };
+
+  const block = renderCheckinBlock(done).split('\n');
+  const next = [...lines.slice(0, range.start), ...block, ...lines.slice(range.end)];
+  fs.writeFileSync(absPath, normalizeEof(next), 'utf8');
+  return { added: minEmpty - groups, empty: minEmpty * RESULTS.length };
 }
 
 /** 撤销一条打卡记录（点错了改回来） */
