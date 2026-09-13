@@ -241,6 +241,48 @@ await sleep(1600);
 const afterClick = await s.js(`return document.getElementById('journalDate').value;`);
 check('复盘：直接点历史条目就能切过去', afterClick === firstItem, `${afterClick}（点了 ${firstItem}）`);
 
+/* ---------- 0.8 好题本 ---------- */
+await s.js(`document.querySelector('.tab[data-module="good"]').click();`);
+await sleep(1800);
+const goodTabs = await s.js(`return [...document.querySelectorAll('.tab')].map(x=>x.textContent.trim()).join('/');`);
+check('顶栏：好题与题型模块已加入', goodTabs.includes('好题') && goodTabs.includes('题型'), goodTabs);
+const goodSubs = await s.js(`return [...document.querySelectorAll('.subtab')].map(x=>x.textContent.trim()).join('/');`);
+check('好题本：与错题本同一套子页面', goodSubs === '总览/题库/复习/增题', goodSubs);
+check('好题本：目前为空（还没有好题）', (await s.js(`return !!document.querySelector('.empty-row, .category-grid, .problem-card');`)) === true);
+await s.shot('19-good');
+
+/* ---------- 0.9 题型大全 ---------- */
+await s.js(`document.querySelector('.tab[data-module="patterns"]').click();`);
+await sleep(2000);
+await s.waitFor('.pattern-card');
+const ptCount = await s.js(`return document.querySelectorAll('.pattern-card').length;`);
+check('题型：通解卡片已渲染', ptCount >= 5, `${ptCount} 个题型`);
+const ptStats = await s.js(
+  `return [...document.querySelectorAll('.pattern-head .stat-label')].map(x=>x.textContent.trim()).join('/');`
+);
+check('题型：四张统计卡（题型数/掌握度/已归类/未归类）', ptStats.includes('题型数') && ptStats.includes('平均掌握度'), ptStats);
+// 展开一个通解看关联题目
+await s.js(`document.querySelector('[data-pattern-toggle]').click();`);
+await sleep(800);
+const relChips = await s.js(`return document.querySelectorAll('.rel-chip').length;`);
+check('题型：展开后能看到关联的错题/好题', relChips >= 1, `${relChips} 道关联题目`);
+const hasSteps = await s.js(`return (document.querySelector('.pp-body')?.textContent || '').includes('通解步骤');`);
+check('题型：通解正文（适用特征/步骤/易错点）已渲染', hasSteps === true);
+check('题型：题目已全部归类，生成按钮转为禁用', (await s.js(`return document.querySelector('[data-pattern-prompt]').disabled;`)) === true);
+await s.shot('20-patterns');
+const pt = await api2('/api/patterns');
+check(
+  '题型：每道题都归到了某个通解',
+  pt.unlinkedCount === 0 && pt.patterns.every((x) => x.related.length > 0),
+  `${pt.patterns.length} 个通解，未归类 ${pt.unlinkedCount}`
+);
+const ptPrompt = await api2('/api/pattern-prompt');
+check(
+  '题型：提示词包含已有通解与归类要求',
+  ptPrompt.prompt.includes('已有的通解') && ptPrompt.prompt.includes('同一题型只允许一份通解'),
+  `${ptPrompt.prompt.length} 字`
+);
+
 /* ---------- 1. 错题模块：先造一道「遗忘曲线到期」的题 ---------- */
 // 用 3 天前做「完美」的方式，让间隔 1 天的排期立刻到期（不依赖外部预置数据）
 const seedList = await (await fetch(`${APP}/api/questions`)).json();

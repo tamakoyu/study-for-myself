@@ -5,6 +5,9 @@ import { mdToHtml, plainText, initMath } from './markdown.js';
    ============================================================ */
 const state = {
   module: 'today',
+  book: 'mistakes',
+  patterns: null,
+  openPattern: null,
   sub: 'dashboard',
   view: 'dashboard',
   scope: { category: null, subject: null, chapter: null },
@@ -42,9 +45,10 @@ const state = {
   journal: null,
 };
 
-const MODULES = ['today', 'mistakes', 'plan', 'journal'];
+const MODULES = ['today', 'mistakes', 'good', 'patterns', 'plan', 'journal'];
+const BOOK_OF = { mistakes: 'mistakes', good: 'good' };
 const SUBVIEWS = ['dashboard', 'library', 'drill', 'add', 'solve'];
-const MODULE_LABEL = { today: '今日', mistakes: '错题', plan: '计划', journal: '复盘' };
+const MODULE_LABEL = { today: '今日', mistakes: '错题', good: '好题', patterns: '题型', plan: '计划', journal: '复盘' };
 
 /** 错因词表（与后端 taxonomy.mjs 保持一致） */
 const REASONS = ['概念不清', '方法不会', '思路方向错', '计算失误', '审题错误', '公式记错', '粗心大意', '时间不够'];
@@ -128,6 +132,7 @@ function scopeQuery(scope = state.scope) {
 
 function scopeOfProblem(p) {
   const s = state.scope;
+  if ((p.kind || 'mistakes') !== state.book) return false;
   if (s.category && p.category !== s.category) return false;
   if (s.subject && p.subject !== s.subject) return false;
   if (s.chapter && p.chapter !== s.chapter) return false;
@@ -135,8 +140,14 @@ function scopeOfProblem(p) {
 }
 
 /** 当前范围在树上的节点 */
+/** 当前这本（错题 / 好题）的导航树 */
+function currentTree() {
+  const trees = state.data?.trees || {};
+  return trees[state.book] || state.data?.tree || [];
+}
+
 function scopeNode() {
-  const { tree } = state.data;
+  const tree = currentTree();
   const cat = state.scope.category ? tree.find((c) => c.name === state.scope.category) : null;
   const sub = cat && state.scope.subject ? cat.children.find((s) => s.name === state.scope.subject) : null;
   const ch = sub && state.scope.chapter ? sub.children.find((c) => c.name === state.scope.chapter) : null;
@@ -159,7 +170,7 @@ const catIcon = (name) => CAT_ICON[name] || '📚';
 /** 顶栏那个「当前在看哪本错题本」的按钮 */
 function renderScopeButton() {
   if (!state.data) return;
-  const { tree } = state.data;
+  const tree = currentTree();
   const { cat, sub, ch } = scopeNode();
   const total = tree.reduce((s, c) => s + c.total, 0);
 
@@ -189,7 +200,7 @@ function scopeRow({ active = false, indent = 0, icon = '', name, count = 0, attr
  * 没选中的大类只列科目名，保持紧凑；选中的才展开章节。
  */
 function renderScopeMenu() {
-  const { tree } = state.data;
+  const tree = currentTree();
   const { cat, sub } = scopeNode();
   const total = tree.reduce((s, c) => s + c.total, 0);
 
@@ -557,7 +568,7 @@ function insightPanels(stats) {
 }
 
 function renderDashboard() {
-  const { tree } = state.data;
+  const tree = currentTree();
   const stats = state.stats;
   const { cat, sub, ch } = scopeNode();
 
@@ -1605,7 +1616,10 @@ async function addCreate() {
   if (!items.length) return;
   state.add.busy = true;
   try {
-    const out = await api('/api/new', { method: 'POST', body: JSON.stringify({ items }) });
+    const out = await api('/api/new', {
+      method: 'POST',
+      body: JSON.stringify({ items, book: state.book }),
+    });
     state.add.items = null;
     state.add.raw = '';
     await reload({ silent: true });
@@ -1725,6 +1739,139 @@ async function addPrompt() {
 /* ============================================================
    渲染 & 路由
    ============================================================ */
+
+
+/* ============================================================
+   题型大全：每个题型一份通解
+   ============================================================ */
+async function loadPatterns(force = false) {
+  if (state.patterns && !force) return;
+  try {
+    state.patterns = await api('/api/patterns');
+  } catch (err) {
+    state.patterns = { patterns: [], tree: [], unlinkedCount: 0 };
+    toast(`读取题型本失败：${err.message}`, 'err');
+  }
+}
+
+/** 掌握度徽标 */
+function masteryBadge(pt) {
+  const m = pt.mastery;
+  if (m == null) {
+    return pt.linkedCount
+      ? '<span class="mastery none">还没练过</span>'
+      : '<span class="mastery none">未关联题目</span>';
+  }
+  const tone = m >= 70 ? 'good' : m >= 40 ? 'mid' : 'low';
+  return `<span class="mastery ${tone}">掌握度 ${m}%</span>`;
+}
+
+function renderPatterns() {
+  const d = state.patterns;
+  if (!d) return '<div class="loading"><div class="spinner"></div><p>正在读取题型本…</p></div>';
+
+  const list = d.patterns || [];
+  const withMastery = list.filter((x) => x.mastery != null);
+  const avg = withMastery.length ? Math.round(withMastery.reduce((s, x) => s + x.mastery, 0) / withMastery.length) : 0;
+  const linkedTotal = list.reduce((s, x) => s + x.linkedCount, 0);
+
+  const head = `<section class="panel pattern-head">
+    <div class="panel-head">
+      <h3>📐 题型大全</h3>
+      <span class="hint">每个题型一份通解，掌握度由关联的错题/好题算出来</span>
+    </div>
+    <div class="panel-body">
+      <div class="stat-grid" style="margin-bottom:14px">
+        <div class="stat-card"><div class="stat-label">题型数</div><div class="stat-value">${list.length}</div>
+          <div class="stat-foot">覆盖 ${(d.tree || []).length} 个大类</div></div>
+        <div class="stat-card is-done"><div class="stat-label">平均掌握度</div><div class="stat-value">${avg}<span class="unit">%</span></div>
+          <div class="stat-foot">${withMastery.length} 个题型有数据</div>
+          <div class="progress"><i style="width:${avg}%"></i></div></div>
+        <div class="stat-card"><div class="stat-label">已归类题目</div><div class="stat-value">${linkedTotal}</div>
+          <div class="stat-foot">共 ${linkedTotal + d.unlinkedCount} 道</div></div>
+        <div class="stat-card is-pending"><div class="stat-label">还没归类</div><div class="stat-value">${d.unlinkedCount}</div>
+          <div class="stat-foot">点右边按钮把它们计入题型本</div></div>
+      </div>
+      <button class="btn-primary" data-pattern-prompt="1" ${d.unlinkedCount ? '' : 'disabled'}>
+        📋 生成提示词：把没归类的 ${d.unlinkedCount} 道题计入题型本
+      </button>
+      ${d.unlinkedCount ? '' : '<span class="rv-hint" style="margin-left:12px">所有题目都已归类到某个通解 🎉</span>'}
+      <div class="rv-hint" style="margin-top:8px">
+        生成的提示词里会带上<b>所有已有通解</b>和<b>没归类的题目</b>。发给我之后，能并入已有通解的只改关联，
+        新题型才新建 —— 同一题型永远只有一份通解。
+      </div>
+    </div>
+  </section>`;
+
+  if (!list.length) {
+    return `${head}<div class="panel" style="margin-top:14px"><div class="panel-body empty-row">
+      题型本还是空的。点上面的按钮生成提示词，发给我，我来按题型写第一份通解。
+    </div></div>`;
+  }
+
+  const cards = list
+    .map((pt) => {
+      const open = state.openPattern === pt.id;
+      const rel = (pt.related || [])
+        .map((id) => state.data.problems.find((p) => p.id === id))
+        .filter(Boolean);
+      return `<article class="pattern-card${open ? ' is-open' : ''}" data-pattern-toggle="${esc(pt.id)}">
+      <div class="pp-head">
+        <h3>${esc(pt.title)}</h3>
+        ${pt.type ? `<span class="badge badge-type">${esc(pt.type)}</span>` : ''}
+        ${stars(pt.difficulty)}${fires(pt.heat)}
+      </div>
+      <div class="pp-meta">
+        <span>${esc(pt.category)} · ${esc(pt.subject)} · ${esc(pt.chapter)}</span>
+        <span>关联 <b>${pt.linkedCount}</b> 题</span>
+        ${pt.failCount ? `<span style="color:var(--fail)">累计失败 <b>${pt.failCount}</b> 次</span>` : ''}
+        ${pt.missing.length ? `<span style="color:var(--warn)">${pt.missing.length} 个关联已失效</span>` : ''}
+        ${masteryBadge(pt)}
+      </div>
+      <div class="progress" style="margin-top:8px"><i style="width:${pt.mastery ?? 0}%"></i></div>
+      <div class="pp-fold">
+        ${
+          open
+            ? `<div class="pp-body">
+                ${pt.features ? `<h4>适用特征</h4>${mdToHtml(pt.features)}` : ''}
+                ${pt.steps ? `<h4>通解步骤</h4>${mdToHtml(pt.steps)}` : ''}
+                ${pt.pitfalls ? `<h4>易错点</h4>${mdToHtml(pt.pitfalls)}` : ''}
+                ${
+                  rel.length
+                    ? `<h4>关联题目（${rel.length}）</h4>
+                       <div class="pp-rel">${rel
+                         .map(
+                           (p) => `<button class="rel-chip k-${p.kind}" data-open="${esc(p.id)}">
+                             <span class="rc-kind">${p.kind === 'good' ? '好' : '错'}</span>
+                             ${esc(p.num)}
+                             <span class="rc-status">${esc(statusMeta(p.stats.status).text)}</span>
+                           </button>`
+                         )
+                         .join('')}</div>`
+                    : '<p class="rv-hint">还没关联任何题目。</p>'
+                }
+                <div class="rv-hint" style="margin-top:10px">源文件：<code>${esc(pt.rel)}</code></div>
+              </div>`
+            : '<span class="pp-more">点击查看通解与关联题目 ▾</span>'
+        }
+      </div>
+    </article>`;
+    })
+    .join('');
+
+  return `${head}<div class="pattern-list">${cards}</div>`;
+}
+
+async function copyPatternPrompt() {
+  try {
+    const out = await api('/api/pattern-prompt');
+    if (!out.unlinkedCount) return toast('所有题目都已经归类了', 'ok');
+    await copyText(out.prompt);
+    toast(`提示词已复制（${out.unlinkedCount} 道待归类）—— 粘给我就行`, 'ok');
+  } catch (err) {
+    toast(`生成失败：${err.message}`, 'err');
+  }
+}
 
 /* ============================================================
    study：今日 / 计划 / 笔记 / 复盘
@@ -2194,7 +2341,9 @@ function render() {
   if (state.module === 'today') body = renderToday();
   else if (state.module === 'plan') body = renderPlan();
   else if (state.module === 'journal') body = renderJournal();
-  else {
+  else if (state.module === 'patterns') {
+    body = renderPatterns();
+  } else {
     if (!state.data || !state.stats) {
       main.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在读取错题本…</p></div>';
       return;
@@ -2208,7 +2357,7 @@ function render() {
 
   main.innerHTML = body;
 
-  const inMistakes = state.module === 'mistakes';
+  const inMistakes = state.module === 'mistakes' || state.module === 'good';
   if (inMistakes && state.data) renderScopeButton();
   $('#scopePicker').hidden = !inMistakes || state.sub === 'add' || state.sub === 'solve';
   document.body.classList.toggle('is-solving', inMistakes && state.sub === 'solve');
@@ -2241,7 +2390,7 @@ function renderMistakeSubnav() {
    ============================================================ */
 function buildHash({ module, sub, scope, solveId, rel }) {
   const seg = [module];
-  if (module === 'mistakes') {
+  if (module === 'mistakes' || module === 'good') {
     seg.push(sub);
     if (sub === 'solve') {
       if (solveId) seg.push(solveId);
@@ -2266,8 +2415,9 @@ function applyHash() {
     .map(decodeURIComponent);
   const module = MODULES.includes(parts[0]) ? parts[0] : 'today';
   state.module = module;
+  if (BOOK_OF[module]) state.book = BOOK_OF[module];
 
-  if (module === 'mistakes') {
+  if (module === 'mistakes' || module === 'good') {
     const sub = SUBVIEWS.includes(parts[1]) ? parts[1] : 'dashboard';
     state.sub = sub;
     state.view = sub;
@@ -2294,6 +2444,11 @@ function applyHash() {
   stopReviewTimer();
   closeSolveTimerOnly();
 
+  if (module === 'patterns') {
+    loadPatterns().then(() => render());
+    render();
+    return;
+  }
   if (module === 'plan') {
     const rel = parts.slice(1).join('/') || null;
     state.planRel = rel;
@@ -2326,7 +2481,7 @@ function go(patch = {}) {
   const module = patch.module ?? state.module;
   const sub = patch.sub ?? state.sub;
 
-  if (module === 'mistakes') {
+  if (module === 'mistakes' || module === 'good') {
     const scope = {
       category: patch.category !== undefined ? patch.category : state.scope.category,
       subject: patch.subject !== undefined ? patch.subject : state.scope.subject,
@@ -2594,6 +2749,13 @@ function bindEvents() {
       return go({ module: v });
     }
     if (e.target.closest('[data-weekly-prompt]')) return copyWeeklyPrompt();
+    if (e.target.closest('[data-pattern-prompt]')) return copyPatternPrompt();
+    const ptoggle = e.target.closest('[data-pattern-toggle]');
+    if (ptoggle) {
+      const id = ptoggle.dataset.patternToggle;
+      state.openPattern = state.openPattern === id ? null : id;
+      return render();
+    }
 
     const planBtn = e.target.closest('[data-plan]');
     if (planBtn) return go({ module: 'plan', rel: planBtn.dataset.plan });

@@ -17,10 +17,12 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, updatePoints, updateReason,
-  exportAll, saveUpload, listUploads, deleteUploads, promptForImages, APP_DIR,
+  exportAll, saveUpload, listUploads, deleteUploads, promptForImages,
+  patternsSnapshot, patternPrompt, APP_DIR,
 } from './lib/notebook.mjs';
 import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.mjs';
 import { chapterOptions } from './lib/create.mjs';
+import { filterByScope } from './lib/stats.mjs';
 import { scanPlans, toggleTask } from './lib/plans.mjs';
 import { readReview, writeReview, listReviews } from './lib/reviews.mjs';
 import { buildToday, plansCached } from './lib/today.mjs';
@@ -173,12 +175,16 @@ async function main() {
 
       if (p === '/api/questions' && req.method === 'GET') {
         const snap = snapshot(cfg);
+        const book = url.searchParams.get('book');
+        const problems = book ? filterByScope(snap.problems, { book }) : snap.problems;
         sendJson(res, 200, {
+          book: book || null,
           notebookDir: snap.notebookDir,
           taxonomy: snap.taxonomy,
           tree: snap.tree,
+          trees: snap.trees,
           options: chapterOptions(),
-          problems: snap.problems,
+          problems,
           errors: snap.errors,
           stats: snap.stats,
         });
@@ -200,7 +206,7 @@ async function main() {
 
       if (p === '/api/new' && req.method === 'POST') {
         const body = await readBody(req);
-        sendJson(res, 200, addQuestions(cfg, body.items));
+        sendJson(res, 200, addQuestions(cfg, body.items, body.book || 'mistakes'));
         return;
       }
 
@@ -242,6 +248,27 @@ async function main() {
 
       if (p === '/api/weekly' && req.method === 'GET') {
         sendJson(res, 200, buildWeekly(cfg, snapshot(cfg).stats));
+        return;
+      }
+
+      if (p === '/api/patterns' && req.method === 'GET') {
+        const out = patternsSnapshot(cfg);
+        sendJson(res, 200, {
+          dir: out.dir,
+          tree: out.tree,
+          unlinkedCount: out.unlinked.length,
+          patterns: out.patterns.map((x) => ({
+            id: x.id, rel: x.rel, title: x.title, category: x.category, subject: x.subject, chapter: x.chapter,
+            type: x.type, difficulty: x.difficulty, heat: x.heat, linkedCount: x.linkedCount,
+            mastery: x.mastery, linkedRate: x.linkedRate, failCount: x.failCount,
+            features: x.features, steps: x.steps, pitfalls: x.pitfalls, related: x.related, missing: x.missing,
+          })),
+        });
+        return;
+      }
+
+      if (p === '/api/pattern-prompt' && req.method === 'GET') {
+        sendJson(res, 200, patternPrompt(cfg));
         return;
       }
 

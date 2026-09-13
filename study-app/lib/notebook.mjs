@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanNotebook, today } from './parse.mjs';
+import { scanNotebook, buildTree, today } from './parse.mjs';
 import { computeStats, filterByScope } from './stats.mjs';
 import { recordCheckin, undoCheckin, setMeta, setPoints, setReason, backup } from './write.mjs';
 import {
@@ -13,6 +13,8 @@ import {
   normalizeMath, slugOf, buildPrompt, buildImagePrompt, nextNumber as nextNumberFor,
 } from './create.mjs';
 import { TAXONOMY, UNCLASSIFIED } from './taxonomy.mjs';
+import { scanPatterns, unlinkedProblems } from './patterns.mjs';
+import { buildPatternPrompt } from './create.mjs';
 
 export const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -20,7 +22,9 @@ export function loadConfig() {
   const cfgPath = path.join(APP_DIR, 'config.json');
   const defaults = {
     vaultDir: path.resolve(APP_DIR, '..'),
-    notebookDir: '错题本',
+    notebookDir: '错题本',        // 错题本
+    goodDir: '好题本',            // 好题本（同结构，但没有错因分析）
+    patternDir: '题型本',          // 题型大全：每个题型一篇「通解」
     planDir: '考研',
     reviewDir: '复盘',
     examDate: '2027-12-18',
@@ -46,6 +50,8 @@ export function loadConfig() {
 
   cfg.vaultDir = appRel(cfg.vaultDir);
   cfg.notebookDir = vaultRel(cfg.notebookDir);
+  cfg.goodDir = vaultRel(cfg.goodDir);
+  cfg.patternDir = vaultRel(cfg.patternDir);
   cfg.planDir = vaultRel(cfg.planDir);
   cfg.reviewDir = vaultRel(cfg.reviewDir);
   cfg.backupDir = appRel(cfg.backupDir);
@@ -54,6 +60,7 @@ export function loadConfig() {
 
   // 环境变量优先，方便指向另一份仓库（做测试用）
   if (process.env.NOTEBOOK_DIR) cfg.notebookDir = path.resolve(process.env.NOTEBOOK_DIR);
+  if (process.env.GOOD_DIR) cfg.goodDir = path.resolve(process.env.GOOD_DIR);
   if (process.env.VAULT_DIR) {
     cfg.vaultDir = path.resolve(process.env.VAULT_DIR);
     cfg.planDir = path.join(cfg.vaultDir, String(cfg.planDirRel || '考研'));
@@ -69,10 +76,15 @@ let cache = { at: 0, data: null };
 export function snapshot(cfg, { force = false } = {}) {
   const now = Date.now();
   if (!force && cache.data && now - cache.at < 1000) return cache.data;
-  const { problems, errors, tree } = scanNotebook(cfg.notebookDir);
+  const a = scanNotebook(cfg.notebookDir, 'mistakes');
+  const b = fs.existsSync(cfg.goodDir) ? scanNotebook(cfg.goodDir, 'good') : { problems: [], errors: [], tree: [] };
+  const problems = [...a.problems, ...b.problems];
+  const errors = [...a.errors, ...b.errors];
+  const tree = buildTree(problems);
   const data = {
     problems,
     errors,
+    trees: { mistakes: a.tree, good: b.tree },
     tree,
     taxonomy: TAXONOMY,
     stats: computeStats(problems, tree),
@@ -95,7 +107,7 @@ export function scopeFromUrl(url) {
     const v = url.searchParams.get(k);
     return v && v !== 'null' && v !== 'undefined' ? v : null;
   };
-  return { category: pick('category'), subject: pick('subject'), chapter: pick('chapter') };
+  return { category: pick('category'), subject: pick('subject'), chapter: pick('chapter'), book: pick('book') };
 }
 
 function findProblem(cfg, id) {
@@ -185,11 +197,12 @@ export function detect(cfg, raw, mode = 'rule') {
 }
 
 /** 批量建题（写盘） */
-export function addQuestions(cfg, items) {
+export function addQuestions(cfg, items, book = 'mistakes') {
   if (!Array.isArray(items) || !items.length) {
     throw Object.assign(new Error('没有要创建的题目'), { status: 400 });
   }
-  const created = createQuestions(cfg.notebookDir, items);
+  const root = book === 'good' ? cfg.goodDir : cfg.notebookDir;
+  const created = createQuestions(root, items, book);
   cache = { at: 0, data: null };
   return { ok: true, created, total: snapshot(cfg, { force: true }).problems.length };
 }
@@ -199,6 +212,24 @@ export function promptFor(cfg, stems, scope = {}) {
   return {
     prompt: buildPrompt(Array.isArray(stems) ? stems : [stems], scope),
     options: chapterOptions(),
+  };
+}
+
+/* ---------------- 题型大全 ---------------- */
+
+export function patternsSnapshot(cfg) {
+  const snap = snapshot(cfg);
+  const { patterns, tree } = scanPatterns(cfg.patternDir, cfg.vaultDir, snap.problems);
+  const unlinked = unlinkedProblems(snap.problems, patterns);
+  return { patterns, tree, unlinked, dir: cfg.patternDir };
+}
+
+export function patternPrompt(cfg) {
+  const { patterns, unlinked } = patternsSnapshot(cfg);
+  return {
+    prompt: buildPatternPrompt({ patterns, unlinked }),
+    patternCount: patterns.length,
+    unlinkedCount: unlinked.length,
   };
 }
 

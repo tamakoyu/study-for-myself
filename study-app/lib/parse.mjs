@@ -31,8 +31,13 @@ const CHECKIN_RE =
 // 这一行在折叠标注里，所以前面可能带 `> `
 const REASON_LINE_RE = /^(?:>\s*)?\*\*首次错因\*\*\s*[　\s]*(.*)$/m;
 
-/** 遗忘曲线：第 n 次做到「完美」之后，隔多少天该重做一遍 */
-export const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30];
+/**
+ * 遗忘曲线间隔（天），下标就是「掌握等级」：
+ *   0 → 1 天（刚失败，明天再来）　1 → 2 天　2 → 4 天 … 6 → 60 天
+ * 每做到一次「完美」升一级 → 越掌握，隔得越久；
+ * 「普通」降一级 → 提醒得早一点；「失败」直接打回 0 级 → 最快提醒。
+ */
+export const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60];
 
 /* ---------------- 日期小工具（本地时区，避免 UTC 偏移） ---------------- */
 export function today(d = new Date()) {
@@ -194,47 +199,46 @@ export function summarize(checkins, nowStr = today()) {
   const dated = sorted.filter((c) => c.date);
   const lastDated = dated.length ? dated[dated.length - 1] : null;
 
-  // ── 遗忘曲线 ──
-  // 每做到一次「完美」就升一级，间隔按 1/2/4/7/15/30 天拉长。
-  // 最近一次若不是完美，就从那一次重新起算，并且退一级（失败直接打回第 1 级）。
+  // ── 遗忘曲线：按日期把历史逐条重放，算出当前的「掌握等级」 ──
+  //   完美 → 升一级（间隔更长）｜普通 → 降一级（提醒更早）｜失败 → 打回 0 级（最快）
   let schedule = null;
-  const perfects = done.filter((c) => c.result === '完美' && c.date).sort(byDate);
-  if (perfects.length) {
-    const lastPerfect = perfects[perfects.length - 1];
-    let level = Math.min(perfects.length - 1, REVIEW_INTERVALS.length - 1);
-    let base = lastPerfect.date;
-
-    if (lastDated && lastDated.result !== '完美' && lastDated.date >= lastPerfect.date) {
-      level = lastDated.result === '失败' ? 0 : Math.max(0, level - 1);
-      base = lastDated.date;
+  const datedRecords = done.filter((c) => c.date).sort(byDate);
+  if (datedRecords.length) {
+    let level = 0;
+    const trail = [];
+    for (const c of datedRecords) {
+      if (c.result === '完美') level = Math.min(level + 1, REVIEW_INTERVALS.length - 1);
+      else if (c.result === '普通') level = Math.max(0, level - 1);
+      else level = 0;
+      trail.push({ date: c.date, result: c.result, level });
     }
-
+    const last = datedRecords[datedRecords.length - 1];
     const interval = REVIEW_INTERVALS[level];
-    const due = addDays(base, interval);
+    const due = addDays(last.date, interval);
     const overdue = daysBetween(due, nowStr); // >0 已过期，=0 今天到期，<0 还没到
     schedule = {
-      level: perfects.length,
+      level,
+      levelMax: REVIEW_INTERVALS.length - 1,
       interval,
-      base,
-      lastPerfectDate: lastPerfect.date,
+      base: last.date,
       due,
       overdue,
       isDue: overdue >= 0,
+      lastResult: last.result,
+      lastPerfectDate: (done.filter((c) => c.result === '完美' && c.date).sort(byDate).pop() || {}).date || null,
+      trail,
     };
   }
 
-  // 状态判定：最近一次就做错/做得不顺 → 不算完成，回到待复习
-  const lastWasFlop = !!lastDated && lastDated.result !== '完美';
+  // 状态：没做过 / 到点了该复习 / 已掌握且没到期 / 做过但还没掌握
   const status =
-    perfect === 0
-      ? done.length
-        ? '进行中'
-        : '未做'
-      : lastWasFlop
-        ? '进行中'
-        : schedule.isDue
-          ? '到期'
-          : '完成';
+    done.length === 0
+      ? '未做'
+      : schedule && schedule.isDue
+        ? '到期'
+        : perfect > 0 && schedule.lastResult === '完美'
+          ? '完成'
+          : '进行中';
 
   // ── 用时 ──
   const secs = done.map((c) => c.seconds).filter((n) => typeof n === 'number' && n > 0);
@@ -256,7 +260,7 @@ export function summarize(checkins, nowStr = today()) {
 }
 
 /** 解析单篇笔记 */
-export function parseNote(absPath, rootDir) {
+export function parseNote(absPath, rootDir, kind = 'mistakes') {
   const text = fs.readFileSync(absPath, 'utf8');
   const warnings = [];
   const fm = parseFrontmatter(text);
@@ -269,7 +273,8 @@ export function parseNote(absPath, rootDir) {
   const category = segs[0] || UNCLASSIFIED;
   const subject = segs[1] || UNCLASSIFIED;
   const chapter = segs[2] || UNCLASSIFIED;
-  const id = fileName.replace(/\.md$/, '');
+  // 两本书里可能有同名文件，id 带上来源保证唯一
+  const id = `${kind}:${fileName.replace(/\.md$/, '')}`;
 
   const titleMatch = body.match(/^#\s+(.+?)\s*$/m);
   const title = titleMatch ? titleMatch[1].trim() : id;
@@ -322,6 +327,7 @@ export function parseNote(absPath, rootDir) {
 
   const note = {
     id,
+    kind,
     num,
     category,
     subject,
@@ -431,7 +437,7 @@ export function buildTree(problems) {
 }
 
 /** 扫描整个错题本目录，返回所有题目 */
-export function scanNotebook(rootDir) {
+export function scanNotebook(rootDir, kind = 'mistakes') {
   const notes = [];
   const problems = [];
   if (!fs.existsSync(rootDir)) return { notes, problems, chapters: [] };
@@ -448,7 +454,7 @@ export function scanNotebook(rootDir) {
       if (SKIP_FILES.has(entry.name)) continue;
       if (SKIP_PREFIX.some((p) => entry.name.startsWith(p))) continue;
       try {
-        const note = parseNote(abs, rootDir);
+        const note = parseNote(abs, rootDir, kind);
         problems.push(note);
       } catch (err) {
         notes.push({ file: abs, error: String(err && err.message) });
@@ -458,5 +464,5 @@ export function scanNotebook(rootDir) {
   walk(rootDir);
 
   problems.sort((a, b) => a.relPath.localeCompare(b.relPath, 'zh'));
-  return { problems, errors: notes, tree: buildTree(problems) };
+  return { problems, errors: notes, tree: buildTree(problems.filter((p) => p.kind === kind)) };
 }

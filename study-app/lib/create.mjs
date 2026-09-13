@@ -61,7 +61,7 @@ const DIFF_WORD = { 1: '送分', 2: '基础', 3: '中档', 4: '较难', 5: '压�
 const HEAT_WORD = { 1: '极少单独考', 2: '低频', 3: '中频', 4: '高频', 5: '超高频' };
 
 /** 生成一篇骨架笔记 */
-export function renderNote({ subject, chapter, num, slug, stem, type, difficulty = 3, heat = 3, title, reason }) {
+export function renderNote({ subject, chapter, num, slug, stem, type, difficulty = 3, heat = 3, title, reason, kind = 'mistakes' }) {
   const pad = String(num).padStart(2, '0');
   const stars = '⭐'.repeat(difficulty) + '☆'.repeat(5 - difficulty);
   const fires = '🔥'.repeat(heat) + '☆'.repeat(5 - heat);
@@ -69,7 +69,7 @@ export function renderNote({ subject, chapter, num, slug, stem, type, difficulty
 
   return `---
 tags:
-  - 错题本
+  - ${kind === 'good' ? '好题本' : '错题本'}
   - ${subject}
   - ${chapter}
 type: ${type}
@@ -105,12 +105,12 @@ ${stem}
 > [!warning]- 展开 · 易错提醒
 > ⏳ 待补充
 
-## 错因分析
+${kind === 'good' ? '' : `## 错因分析
 
 > [!question]- 展开 · 错因（做题时别看）
 > **首次错因**　${reason || '⏳ 待补充'}
 
-## 打卡记录
+`}## 打卡记录
 
 > 做完一次勾一个结果（每次只勾一个）。勾到「完美」= 进入遗忘曲线；「普通 / 失败」= 仍待复习。
 > 做错的记一下错因，程序会统计你到底是怎么错的。
@@ -133,7 +133,7 @@ ${stem}
  * 批量建题。item 需要 { category, subject, chapter, stem, type, difficulty, heat, slug, title }
  * 编号会自动避开已存在的文件，绝不覆盖。
  */
-export function createQuestions(rootDir, items) {
+export function createQuestions(rootDir, items, kind = 'mistakes') {
   const created = [];
   const pending = new Set();
 
@@ -175,6 +175,7 @@ export function createQuestions(rootDir, items) {
       heat: Number(item.heat) || 3,
       title: item.title,
       reason: item.reason,
+      kind,
     });
     fs.writeFileSync(file, body, 'utf8');
     created.push({
@@ -313,4 +314,131 @@ export function buildImagePrompt(paths, opts = {}) {
     paths.map((_, i) => `（内容见第 ${i + 1} 张图，路径：${paths[i]}）`),
     { ...opts, intro }
   );
+}
+
+
+const REASON_RE = /## 错因分析[\s\S]*?(?=## 打卡记录)/;
+
+/** 好题本不需要错因段 */
+export function stripReasonSection(md) {
+  return String(md).replace(REASON_RE, '');
+}
+
+/** 渲染一份「通解」笔记 */
+export function renderPattern({ subject, chapter, title, slug, type, difficulty = 3, heat = 3, related = [] }) {
+  const stars = '⭐'.repeat(difficulty) + '☆'.repeat(5 - difficulty);
+  const fires = '🔥'.repeat(heat) + '☆'.repeat(5 - heat);
+  return `---
+tags:
+  - 题型本
+  - ${subject}
+  - ${chapter}
+type: 通解
+category: ${type}
+difficulty: ${stars}
+heat: ${fires}
+related:
+${related.length ? related.map((r) => `  - ${r}`).join('\n') : '  - '}
+---
+
+# ${title}
+
+## 适用特征
+
+⏳ 待补充
+
+## 通解步骤
+
+⏳ 待补充
+
+## 例题
+
+⏳ 待补充
+
+## 易错点
+
+⏳ 待补充
+`;
+}
+
+/** 生成「把没归类的题目计入题型本」的提示词 */
+export function buildPatternPrompt({ patterns, unlinked, notebookLabel = '错题本' }) {
+  const existing = patterns.length
+    ? patterns
+        .map(
+          (p) =>
+            `### ${p.title}\n- 位置：\`${p.rel}\`\n- 题型：${p.type || '未标'}　难度 ${'⭐'.repeat(p.difficulty)}　热度 ${'🔥'.repeat(p.heat)}\n- 适用特征：${(p.features || '未写').slice(0, 120)}\n- 已关联 ${p.linkedCount} 题`
+        )
+        .join('\n\n')
+    : '（题型本还是空的）';
+
+  const todo = unlinked.length
+    ? unlinked
+        .map(
+          (p) =>
+            `- id：\`${p.id}\`　${p.kind === 'good' ? '（好题）' : '（错题）'} ${p.subject}/${p.chapter} ${p.num}\n  考点：${(p.points || []).join('、') || '未打标签'}\n  题干：${p.stem.replace(/\s+/g, ' ').slice(0, 130)}`
+        )
+        .join('\n')
+    : '（所有题目都已归类）';
+
+  return `请帮我整理「题型本」（通解库）。
+
+## 已有的通解
+
+${existing}
+
+## 还没归入任何通解的题目（${unlinked.length} 道）
+
+${todo}
+
+## 请你做两件事
+
+**1. 归类**：对上面每道还没归类的题目，判断它属于哪种题型：
+   - 如果它的题型**已经有通解** → 把它的 id 追加到那份通解 frontmatter 的 \`related:\` 列表里（不要重复，也不要新建文件）
+   - 如果没有 → 新建一份通解（见下面的格式）
+
+**2. 写通解**：新通解要按「大类/科目/章节」存放，路径形如
+   \`题型本/<大类>/<科目>/<章节>/<题型名>.md\`（大类科目章节和题目本身一致）
+
+新通解的格式必须严格是：
+
+---
+tags:
+  - 题型本
+  - <科目>
+  - <章节>
+type: 通解
+category: <题型：计算题 / 证明题 / 求极限 / 求导 / 讨论单调性 …>
+difficulty: <五格，☆ 补满>
+heat: <五格，☆ 补满>
+related:
+  - <题目 id，一行一个>
+---
+
+# <题型名，要一眼看懂这招是干什么的>
+
+## 适用特征
+
+- <看到什么样的题就该想到这一招；写成可以对照的特征，不要抽象>
+
+## 通解步骤
+
+1. <第 1 步>
+2. <第 2 步>
+……
+
+## 例题
+
+- <题目 id>　<一句话说明它怎么套这个通解>
+
+## 易错点
+
+- <这类题最容易错在哪>
+
+硬性要求：
+1. **同一题型只允许一份通解** —— 先看已有的通解能不能合并，能合并就只改 \`related\`。
+2. 通解要写成**可执行的步骤**，不要只描述思路。
+3. \`related\` 里的 id 必须原样照抄，一个字都不能改。
+4. 只新建/修改 \`题型本/\` 下的文件，不要动 ${notebookLabel} 里的题目。
+5. 难度 ⭐ 五格、热度 🔥 五格，都要用 ☆ 补满。`;
 }

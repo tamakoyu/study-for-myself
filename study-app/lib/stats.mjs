@@ -25,6 +25,7 @@ export function priorityOf(p) {
 /** 按范围筛题。scope 里没给的层级表示不限 */
 export function filterByScope(problems, scope = {}) {
   return problems.filter((p) => {
+    if (scope.book && (p.kind || 'mistakes') !== scope.book) return false;
     if (scope.category && p.category !== scope.category) return false;
     if (scope.subject && p.subject !== scope.subject) return false;
     if (scope.chapter && p.chapter !== scope.chapter) return false;
