@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>高数错题本</title>
+    <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📕</text></svg>" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">📕</span>
+        <span class="brand-text">高数错题本</span>
+        <span class="brand-sub" id="brandSub">加载中…</span>
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <button class="tab is-active" data-view="dashboard">总览</button>
+        <button class="tab" data-view="library">题库</button>
+        <button class="tab" data-view="review">复习</button>
+      </nav>
+
+      <div class="topbar-tools">
+        <label class="search">
+          <span class="search-icon">⌕</span>
+          <input id="search" type="search" placeholder="搜索题号 / 考点 / 题干…" autocomplete="off" />
+        </label>
+        <button class="icon-btn" id="btnExport" title="导出 questions.json 与 stats.md">⤓</button>
+        <button class="icon-btn" id="btnRefresh" title="重新扫描错题本目录">⟳</button>
+        <button class="icon-btn" id="btnTheme" title="切换深浅色">◐</button>
+      </div>
+    </header>
+
+    <main id="main">
+      <div class="loading"><div class="spinner"></div><p>正在读取错题本…</p></div>
+    </main>
+
+    <aside class="drawer" id="drawer" hidden aria-hidden="true">
+      <div class="drawer-backdrop" data-close-drawer></div>
+      <article class="drawer-panel" id="drawerPanel"></article>
+    </aside>
+
+    <div class="toast-stack" id="toasts"></div>
+
+    <script src="/vendor/katex/katex.min.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "notebookDir": "../高数错题本",
+  "port": 4173,
+  "host": "127.0.0.1",
+  "backupDir": "backups",
+  "exportDir": "data"
+}

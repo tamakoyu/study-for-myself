@@ -1,0 +1,224 @@
+#!/usr/bin/env node
+/**
+ * server.mjs —— 零依赖本地服务
+ *
+ *   node server.mjs            启动并自动打开浏览器
+ *   node server.mjs --no-open  只启动
+ *   node server.mjs --port 4200
+ *
+ * 只监听 127.0.0.1（本机）。若想在手机上访问，把 config.json 的 host 改成 0.0.0.0，
+ * 但请注意：那等于把「能改你错题本」的接口暴露在局域网里。
+ */
+
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { loadConfig, snapshot, checkin, undo, updateMeta, exportAll, APP_DIR } from './lib/notebook.mjs';
+import { RESULTS } from './lib/parse.mjs';
+
+const PUBLIC_DIR = path.join(APP_DIR, 'public');
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.ico': 'image/x-icon',
+};
+
+function parseArgs(argv) {
+  const args = { open: true, port: null };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--no-open') args.open = false;
+    if (argv[i] === '--port') args.port = Number(argv[++i]);
+  }
+  return args;
+}
+
+function sendJson(res, status, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 1e6) {
+        reject(Object.assign(new Error('请求体过大'), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw) return resolve({});
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(Object.assign(new Error('请求体不是合法 JSON'), { status: 400 }));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function serveStatic(req, res, urlPath) {
+  let rel = decodeURIComponent(urlPath === '/' ? '/index.html' : urlPath);
+  const abs = path.join(PUBLIC_DIR, path.normalize(rel).replace(/^(\.\.[/\\])+/, ''));
+  if (!abs.startsWith(PUBLIC_DIR)) {
+    res.writeHead(403).end('Forbidden');
+    return;
+  }
+  fs.stat(abs, (err, st) => {
+    if (err || !st.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('404 Not Found');
+      return;
+    }
+    const ext = path.extname(abs).toLowerCase();
+    const isVendor = abs.includes(`${path.sep}vendor${path.sep}`);
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Content-Length': st.size,
+      'Cache-Control': isVendor ? 'public, max-age=86400' : 'no-cache',
+    });
+    fs.createReadStream(abs).pipe(res);
+  });
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const cfg = loadConfig();
+  const port = args.port || cfg.port || 4173;
+
+  // 启动自检：错题本目录必须存在
+  if (!fs.existsSync(cfg.notebookDir)) {
+    console.error(`\n✗ 找不到错题本目录：${cfg.notebookDir}`);
+    console.error(`  请在 ${path.join(APP_DIR, 'config.json')} 里修改 notebookDir\n`);
+    process.exit(1);
+  }
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const p = url.pathname;
+
+    if (!p.startsWith('/api/')) {
+      serveStatic(req, res, p);
+      return;
+    }
+
+    try {
+      if (p === '/api/health') {
+        sendJson(res, 200, {
+          ok: true,
+          notebookDir: cfg.notebookDir,
+          appDir: APP_DIR,
+          results: RESULTS,
+          time: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (p === '/api/questions' && req.method === 'GET') {
+        const snap = snapshot(cfg);
+        sendJson(res, 200, {
+          notebookDir: snap.notebookDir,
+          chapters: snap.chapters,
+          problems: snap.problems,
+          errors: snap.errors,
+          stats: snap.stats,
+        });
+        return;
+      }
+
+      if (p === '/api/stats' && req.method === 'GET') {
+        const snap = snapshot(cfg);
+        sendJson(res, 200, snap.stats);
+        return;
+      }
+
+      if (p === '/api/export' && (req.method === 'POST' || req.method === 'GET')) {
+        sendJson(res, 200, { ok: true, ...exportAll(cfg) });
+        return;
+      }
+
+      if (p === '/api/checkin' && req.method === 'POST') {
+        const body = await readBody(req);
+        const out = checkin(cfg, body.id, body.result, body.date);
+        sendJson(res, 200, out);
+        return;
+      }
+
+      if (p === '/api/undo' && req.method === 'POST') {
+        const body = await readBody(req);
+        const out = undo(cfg, body.id, body.attempt, body.result);
+        sendJson(res, 200, out);
+        return;
+      }
+
+      if (p === '/api/question' && (req.method === 'PATCH' || req.method === 'POST')) {
+        const body = await readBody(req);
+        const out = updateMeta(cfg, body.id, body);
+        sendJson(res, 200, out);
+        return;
+      }
+
+      sendJson(res, 404, { error: 'No such API route' });
+    } catch (err) {
+      const status = err.status || 500;
+      if (status >= 500) console.error('[api]', err);
+      sendJson(res, status, { error: String(err.message || err) });
+    }
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n✗ 端口 ${port} 已被占用。换一个：node server.mjs --port ${port + 1}\n`);
+    } else {
+      console.error('\n✗ 服务启动失败：', err.message, '\n');
+    }
+    process.exit(1);
+  });
+
+  server.listen(port, cfg.host || '127.0.0.1', () => {
+    const url = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}`;
+    const snap = snapshot(cfg, { force: true });
+    console.log('');
+    console.log('  📕 高数错题本');
+    console.log(`  ${url}`);
+    console.log('');
+    console.log(`  错题目录  ${cfg.notebookDir}`);
+    console.log(`  已收录    ${snap.problems.length} 题，${snap.chapters.length} 个章节`);
+    if (snap.errors.length) console.log(`  ⚠ 解析失败 ${snap.errors.length} 篇`);
+    console.log('');
+    console.log('  按 Ctrl+C 退出');
+    console.log('');
+
+    if (args.open) {
+      const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      try {
+        spawn(cmd, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).unref();
+      } catch {
+        /* 打不开就算了，手动点链接即可 */
+      }
+    }
+  });
+}
+
+main();
