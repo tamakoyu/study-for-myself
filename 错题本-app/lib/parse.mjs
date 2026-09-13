@@ -7,12 +7,20 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { UNCLASSIFIED, CATEGORIES as CATEGORY_ORDER, SUBJECTS as SUBJECT_ORDER, TAXONOMY } from './taxonomy.mjs';
+
+const CHAPTER_ORDER = Object.fromEntries(
+  Object.entries(TAXONOMY).flatMap(([, subs]) => Object.entries(subs))
+);
 
 export const RESULTS = ['完美', '普通', '失败'];
 
 /** 题目文件之外的、需要跳过的文件 */
 const SKIP_FILES = new Set(['00-错题本总览.md', '_错题模板.md']);
 const SKIP_PREFIX = ['00-'];
+
+/** 识别用的笔记标签；后者是旧版命名，向后兼容 */
+const NOTE_TAGS = ['错题本', '高数错题本'];
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const CHECKIN_RE =
@@ -173,7 +181,11 @@ export function parseNote(absPath, rootDir) {
 
   const relPath = path.relative(rootDir, absPath).split(path.sep).join('/');
   const fileName = path.basename(absPath);
-  const chapter = path.dirname(relPath) === '.' ? '未分类' : path.dirname(relPath).split('/')[0];
+  // 三级结构：<大类>/<科目>/<章节>/题目.md（章节可省略，省略时以科目名占位）
+  const segs = relPath.split('/').slice(0, -1);
+  const category = segs[0] || UNCLASSIFIED;
+  const subject = segs[1] || UNCLASSIFIED;
+  const chapter = segs[2] || UNCLASSIFIED;
   const id = fileName.replace(/\.md$/, '');
 
   const titleMatch = body.match(/^#\s+(.+?)\s*$/m);
@@ -199,7 +211,7 @@ export function parseNote(absPath, rootDir) {
   const solutionCallouts = extractCallouts(solutionText);
 
   const tags = Array.isArray(fm.data.tags) ? fm.data.tags : [];
-  if (!tags.includes('高数错题本')) warnings.push('frontmatter 缺少 `高数错题本` 标签');
+  if (!NOTE_TAGS.some((t) => tags.includes(t))) warnings.push('frontmatter 缺少 `错题本` 标签');
   if (!fm.data.type) warnings.push('frontmatter 缺少 `type`');
   if (!fm.data.difficulty) warnings.push('frontmatter 缺少 `difficulty`');
   if (!fm.data.heat) warnings.push('frontmatter 缺少 `heat`');
@@ -214,6 +226,8 @@ export function parseNote(absPath, rootDir) {
   const note = {
     id,
     num,
+    category,
+    subject,
     chapter,
     title,
     expr: exprMatch ? exprMatch[1].trim() : exprPart,
@@ -237,10 +251,72 @@ export function parseNote(absPath, rootDir) {
     warnings,
   };
   note.stats = summarize(checkins);
-  note.searchText = [note.num, note.title, note.type, note.keypoints, note.stem]
+  note.searchText = [note.num, note.category, note.subject, note.chapter, note.title, note.type, note.keypoints, note.stem]
     .join(' ')
     .replace(/\s+/g, ' ');
   return note;
+}
+
+/**
+ * 按「大类 → 科目 → 章节」汇总题目，用于导航与总览。
+ * 顺序优先跟随 TAXONOMY 里的编排，出现体系外的名字时排在最后。
+ */
+export function buildTree(problems) {
+  const tree = [];
+  const ensure = (list, key, name) => {
+    let node = list.find((x) => x.name === name);
+    if (!node) {
+      node = { name, key, total: 0, done: 0, children: [] };
+      list.push(node);
+    }
+    return node;
+  };
+  const tag = (node, p) => {
+    node.total += 1;
+    if (p.stats.status === '完成') node.done += 1;
+  };
+
+  // 先把「大类 / 科目」骨架铺好：哪怕 0 题，数学与 408 两个大页也始终存在。
+  // 章节不预建，有题才出现，免得导航里全是空章节。
+  for (const [catName, subjects] of Object.entries(TAXONOMY)) {
+    const catNode = ensure(tree, 'category', catName);
+    for (const subName of Object.keys(subjects)) ensure(catNode.children, 'subject', subName);
+  }
+
+  for (const p of problems) {
+    const cat = ensure(tree, 'category', p.category);
+    tag(cat, p);
+    const sub = ensure(cat.children, 'subject', p.subject);
+    tag(sub, p);
+    const ch = ensure(sub.children, 'chapter', p.chapter);
+    tag(ch, p);
+  }
+
+  // 按体系顺序排序：体系内的按 TAXONOMY 顺序，体系外的按题数降序排后面
+  const orderOf = (list, getIndex, name) => {
+    const i = getIndex(name);
+    return i === -1 ? 999 + list.findIndex((x) => x.name === name) : i;
+  };
+  tree.sort(
+    (a, b) =>
+      orderOf(tree, (n) => CATEGORY_ORDER.indexOf(n), a.name) -
+      orderOf(tree, (n) => CATEGORY_ORDER.indexOf(n), b.name)
+  );
+  for (const cat of tree) {
+    cat.children.sort(
+      (a, b) =>
+        orderOf(cat.children, (n) => (SUBJECT_ORDER[cat.name] || []).indexOf(n), a.name) -
+        orderOf(cat.children, (n) => (SUBJECT_ORDER[cat.name] || []).indexOf(n), b.name)
+    );
+    for (const sub of cat.children) {
+      sub.children.sort(
+        (a, b) =>
+          orderOf(sub.children, (n) => (CHAPTER_ORDER[sub.name] || []).indexOf(n), a.name) -
+          orderOf(sub.children, (n) => (CHAPTER_ORDER[sub.name] || []).indexOf(n), b.name)
+      );
+    }
+  }
+  return tree;
 }
 
 /** 扫描整个错题本目录，返回所有题目 */
@@ -270,16 +346,6 @@ export function scanNotebook(rootDir) {
   };
   walk(rootDir);
 
-  const chapters = [...new Set(problems.map((p) => p.chapter))].sort((a, b) => {
-    const order = ['极限', '连续', '函数', '导数', '微分', '积分'];
-    const ia = order.indexOf(a);
-    const ib = order.indexOf(b);
-    if (ia !== -1 && ib !== -1) return ia - ib;
-    if (ia !== -1) return -1;
-    if (ib !== -1) return 1;
-    return a.localeCompare(b, 'zh');
-  });
-
   problems.sort((a, b) => a.relPath.localeCompare(b.relPath, 'zh'));
-  return { problems, errors: notes, chapters };
+  return { problems, errors: notes, tree: buildTree(problems) };
 }

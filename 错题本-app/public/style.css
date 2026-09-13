@@ -687,3 +687,164 @@ blockquote {
   .rv-record-label { width: 100%; }
   .rv-record .checkin-btn { flex: 1 1 100%; }
 }
+
+/* ============================================================
+   范围条（大类 / 科目 / 章节）
+   ============================================================ */
+.scopebar {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.scope-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scope-label {
+  flex: 0 0 34px;
+  color: var(--text-3); font-size: 11.5px; letter-spacing: .06em;
+  border-right: 1px solid var(--border-soft); padding-right: 10px;
+}
+
+.crumb {
+  font-size: 13px; color: var(--text-3); font-weight: 560;
+  margin: -6px 0 12px; letter-spacing: .02em;
+}
+.crumb::before { content: "▸ "; color: var(--accent); }
+
+/* ============================================================
+   全部总览：数学 / 408 两张大卡
+   ============================================================ */
+.category-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 16px; }
+.category-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: .18s;
+  overflow: hidden;
+}
+.category-card::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+  background: linear-gradient(90deg, var(--accent), #a371f7, #39c5cf);
+  opacity: .9;
+}
+.category-card:hover { transform: translateY(-3px); border-color: var(--accent); }
+.cc-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.cc-mark { font-size: 30px; line-height: 1; }
+.cc-name { font-size: 19px; font-weight: 700; }
+.cc-sub { color: var(--text-3); font-size: 12.5px; }
+.cc-count { margin-left: auto; font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cc-count small { font-size: 13px; font-weight: 500; color: var(--text-3); margin-left: 3px; }
+.cc-foot {
+  display: flex; gap: 16px; font-size: 12.5px; color: var(--text-3);
+  margin: 10px 0 12px;
+}
+.cc-foot b { color: var(--text-2); }
+.cc-chapters {
+  font-size: 12.5px; color: var(--text-3); line-height: 1.9;
+  border-top: 1px dashed var(--border-soft); padding-top: 10px;
+}
+.cc-chapters em { font-style: normal; color: var(--text-2); font-weight: 620; }
+.cc-enter { margin-top: 12px; color: var(--accent); font-size: 13px; font-weight: 580; }
+
+/* ============================================================
+   大类总览：科目卡
+   ============================================================ */
+.subject-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.subject-card {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: .16s;
+}
+.subject-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.sc-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.sc-name { font-size: 16px; font-weight: 650; }
+.sc-count { margin-left: auto; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sc-count small { font-size: 12px; font-weight: 500; color: var(--text-3); margin-left: 2px; }
+.sc-foot { display: flex; gap: 14px; font-size: 12px; color: var(--text-3); margin-top: 10px; }
+.sc-foot b { color: var(--text-2); }
+.sc-chapters { margin-top: 10px; font-size: 12px; color: var(--text-3); line-height: 1.9; }
+.sc-chapters em { font-style: normal; color: var(--text-2); font-weight: 620; }
+
+/* ============================================================
+   增题页
+   ============================================================ */
+.add-page { max-width: 980px; margin: 0 auto; }
+.add-page textarea {
+  width: 100%;
+  min-height: 190px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.75;
+  resize: vertical;
+  outline: none;
+  transition: .16s;
+}
+.add-page textarea:focus { border-color: var(--accent); background: var(--surface); }
+.add-page textarea::placeholder { color: var(--text-3); }
+.add-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.ai-label { color: var(--text-3); font-size: 12.5px; margin-right: 2px; }
+.btn-ghost.small { padding: 6px 14px; font-size: 13px; border-radius: 9px; }
+
+.add-items { display: flex; flex-direction: column; gap: 12px; }
+.add-item {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+}
+.ai-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.ai-no { font-weight: 680; font-size: 14px; }
+.ai-file { color: var(--text-3); font-size: 12px; font-family: var(--mono); margin-left: auto; }
+.ai-fields { display: flex; flex-wrap: wrap; gap: 10px 14px; }
+.ai-fields label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 11.5px; color: var(--text-3); letter-spacing: .04em;
+}
+.ai-fields label.grow { flex: 1 1 200px; }
+.ai-fields input, .ai-fields select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  outline: none;
+  min-width: 92px;
+}
+.ai-fields input:focus, .ai-fields select:focus { border-color: var(--accent); background: var(--surface); }
+.ai-stem {
+  margin: 12px 0 0;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  font-family: var(--font);
+  font-size: 13px; line-height: 1.7;
+  color: var(--text-2);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 160px; overflow: auto;
+}
+
+/* 题目卡片 / 抽屉 / 复习页里的归属行 */
+.pc-where, .rv-where, .drawer-where { font-size: 12px; color: var(--text-3); }
+.pc-where { margin-top: -4px; }
+.drawer-where { margin-top: 6px; }
+.rv-where { margin-left: auto; font-size: 12px; }

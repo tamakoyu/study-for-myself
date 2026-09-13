@@ -1,6 +1,9 @@
 /**
  * stats.mjs —— 统计聚合
  * 所有数字都从题目的打卡记录现算，不存任何冗余状态，因此永不失真。
+ *
+ * 支持「范围」：全部 / 某大类 / 某大类某科目 / 某科目某章节。
+ * 前端切换页面时只换 scope，算法只有这一份。
  */
 
 import { RESULTS } from './parse.mjs';
@@ -12,14 +15,19 @@ export function statusLabel(status) {
   return STATUS_LABEL[status] || status;
 }
 
-/** 记录的日期（没有日期就按未记录处理） */
-function datesOf(problem) {
-  return problem.checkins.filter((c) => c.done && c.date).map((c) => c.date);
-}
-
 /** 复习优先级：热度权重最高，其次难度，再减去已打卡次数 */
 export function priorityOf(p) {
   return p.heat * 2 + p.difficulty - p.stats.total * 0.5 + (p.stats.fail > 0 ? 1.5 : 0);
+}
+
+/** 按范围筛题。scope 里没给的层级表示不限 */
+export function filterByScope(problems, scope = {}) {
+  return problems.filter((p) => {
+    if (scope.category && p.category !== scope.category) return false;
+    if (scope.subject && p.subject !== scope.subject) return false;
+    if (scope.chapter && p.chapter !== scope.chapter) return false;
+    return true;
+  });
 }
 
 function groupCount(problems, keyFn, keys) {
@@ -35,7 +43,7 @@ function groupCount(problems, keyFn, keys) {
   return [...out.values()];
 }
 
-export function computeStats(problems, chapters) {
+export function computeStats(problems, tree = []) {
   const total = problems.length;
   const done = problems.filter((p) => p.stats.status === '完成').length;
   const started = problems.filter((p) => p.stats.status === '进行中').length;
@@ -85,6 +93,14 @@ export function computeStats(problems, chapters) {
     .sort((a, b) => (a.date < b.date ? 1 : -1))
     .slice(0, 12);
 
+  const share = (node) => ({
+    name: node.name,
+    total: node.total,
+    done: node.done,
+    pending: node.total - node.done,
+    rate: node.total ? Math.round((node.done / node.total) * 100) : 0,
+  });
+
   return {
     generatedAt: new Date().toISOString(),
     totals: {
@@ -99,10 +115,15 @@ export function computeStats(problems, chapters) {
       streak,
       activeDays: activeDates.size,
     },
-    byChapter: groupCount(problems, (p) => p.chapter, chapters),
+    // 只统计「当前范围里真实出现过的」大类 / 科目 / 章节
+    byCategory: groupCount(problems, (p) => p.category, [...new Set(problems.map((p) => p.category))]),
+    bySubject: groupCount(problems, (p) => p.subject, [...new Set(problems.map((p) => p.subject))]),
+    byChapter: groupCount(problems, (p) => p.chapter, [...new Set(problems.map((p) => p.chapter))]),
     byHeat: groupCount(problems, (p) => p.heat, [1, 2, 3, 4, 5]),
     byDifficulty: groupCount(problems, (p) => p.difficulty, [1, 2, 3, 4, 5]),
     byType: groupCount(problems, (p) => p.type, [...new Set(problems.map((p) => p.type))]),
+    // 大类 / 科目的地板数据（含 0 题的科目），给导航和上层总览用
+    tree: tree.map((cat) => ({ ...share(cat), subjects: cat.children.map(share) })),
     trend,
     pending: pending.map(slim),
     troubled: troubled.map(slim),
@@ -114,6 +135,8 @@ function slim(p) {
   return {
     id: p.id,
     num: p.num,
+    category: p.category,
+    subject: p.subject,
     chapter: p.chapter,
     title: p.title,
     type: p.type,

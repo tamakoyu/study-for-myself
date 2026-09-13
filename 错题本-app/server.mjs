@@ -15,7 +15,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, snapshot, checkin, undo, updateMeta, exportAll, APP_DIR } from './lib/notebook.mjs';
+import { loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, exportAll, APP_DIR } from './lib/notebook.mjs';
+import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.mjs';
+import { chapterOptions } from './lib/create.mjs';
 import { RESULTS } from './lib/parse.mjs';
 
 const PUBLIC_DIR = path.join(APP_DIR, 'public');
@@ -139,7 +141,9 @@ async function main() {
         const snap = snapshot(cfg);
         sendJson(res, 200, {
           notebookDir: snap.notebookDir,
-          chapters: snap.chapters,
+          taxonomy: snap.taxonomy,
+          tree: snap.tree,
+          options: chapterOptions(),
           problems: snap.problems,
           errors: snap.errors,
           stats: snap.stats,
@@ -148,8 +152,27 @@ async function main() {
       }
 
       if (p === '/api/stats' && req.method === 'GET') {
-        const snap = snapshot(cfg);
-        sendJson(res, 200, snap.stats);
+        // 可选范围：?category=数学&subject=高数&chapter=极限
+        const { stats, problems } = scoped(cfg, scopeFromUrl(url));
+        sendJson(res, 200, { ...stats, scopedCount: problems.length });
+        return;
+      }
+
+      if (p === '/api/detect' && req.method === 'POST') {
+        const body = await readBody(req);
+        sendJson(res, 200, detectItems(cfg, body.raw, body.mode));
+        return;
+      }
+
+      if (p === '/api/new' && req.method === 'POST') {
+        const body = await readBody(req);
+        sendJson(res, 200, addQuestions(cfg, body.items));
+        return;
+      }
+
+      if (p === '/api/prompt' && req.method === 'POST') {
+        const body = await readBody(req);
+        sendJson(res, 200, promptFor(cfg, body.stems, body));
         return;
       }
 
@@ -200,11 +223,15 @@ async function main() {
     const url = `http://${cfg.host === '0.0.0.0' ? '127.0.0.1' : cfg.host}:${port}`;
     const snap = snapshot(cfg, { force: true });
     console.log('');
-    console.log('  📕 高数错题本');
+    console.log('  📕 错题本');
     console.log(`  ${url}`);
     console.log('');
     console.log(`  错题目录  ${cfg.notebookDir}`);
-    console.log(`  已收录    ${snap.problems.length} 题，${snap.chapters.length} 个章节`);
+    console.log(
+      `  已收录    ${snap.problems.length} 题 · ${snap.tree
+        .map((c) => `${c.name}(${c.total})`)
+        .join(' ')}`
+    );
     if (snap.errors.length) console.log(`  ⚠ 解析失败 ${snap.errors.length} 篇`);
     console.log('');
     console.log('  按 Ctrl+C 退出');

@@ -6,25 +6,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanNotebook } from './parse.mjs';
-import { computeStats } from './stats.mjs';
+import { computeStats, filterByScope } from './stats.mjs';
 import { recordCheckin, undoCheckin, setMeta, backup, today } from './write.mjs';
-import {
-  createQuestions,
-  splitProblems,
-  detectChapter,
-  detectType,
-  slugOf,
-  nextNumber,
-  normalizeMath,
-  buildPrompt,
-} from './create.mjs';
+import { chapterOptions, createQuestions, splitProblems, detect as detectByKeywords, detectType, normalizeMath, slugOf, buildPrompt, nextNumber as nextNumberFor } from './create.mjs';
+import { TAXONOMY, UNCLASSIFIED } from './taxonomy.mjs';
 
 export const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export function loadConfig() {
   const cfgPath = path.join(APP_DIR, 'config.json');
   const defaults = {
-    notebookDir: path.resolve(APP_DIR, '..', '高数错题本'),
+    notebookDir: path.resolve(APP_DIR, '..', '错题本'),
     backupDir: path.join(APP_DIR, 'backups'),
     exportDir: path.join(APP_DIR, 'data'),
     port: 4173,
@@ -62,16 +54,33 @@ let cache = { at: 0, data: null };
 export function snapshot(cfg, { force = false } = {}) {
   const now = Date.now();
   if (!force && cache.data && now - cache.at < 1000) return cache.data;
-  const { problems, errors, chapters } = scanNotebook(cfg.notebookDir);
+  const { problems, errors, tree } = scanNotebook(cfg.notebookDir);
   const data = {
     problems,
     errors,
-    chapters,
-    stats: computeStats(problems, chapters),
+    tree,
+    taxonomy: TAXONOMY,
+    stats: computeStats(problems, tree),
     notebookDir: cfg.notebookDir,
   };
   cache = { at: now, data };
   return data;
+}
+
+/** 读某个「大类 / 科目 / 章节」范围内的题目与统计 */
+export function scoped(cfg, scope = {}) {
+  const snap = snapshot(cfg);
+  const problems = filterByScope(snap.problems, scope);
+  return { problems, stats: computeStats(problems, snap.tree) };
+}
+
+/** 解析 URL 查询串里的 scope */
+export function scopeFromUrl(url) {
+  const pick = (k) => {
+    const v = url.searchParams.get(k);
+    return v && v !== 'null' && v !== 'undefined' ? v : null;
+  };
+  return { category: pick('category'), subject: pick('subject'), chapter: pick('chapter') };
 }
 
 function findProblem(cfg, id) {
@@ -115,21 +124,32 @@ export function updateMeta(cfg, id, patch) {
 /** 只做识别与预览，不写盘 */
 export function detect(cfg, raw, mode = 'rule') {
   const parts = splitProblems(raw, mode);
-  const counters = new Map();
   const items = parts.map((stem, index) => {
-    const chapter = detectChapter(stem);
-    if (!counters.has(chapter)) counters.set(chapter, nextNumber(cfg.notebookDir, chapter));
-    const num = counters.get(chapter);
-    counters.set(chapter, num + 1);
+    const guessed = detectByKeywords(stem);
     return {
       index,
       stem: normalizeMath(stem),
-      chapter,
-      num,
+      category: guessed.category,
+      subject: guessed.subject,
+      chapter: guessed.chapter,
+      confidence: guessed.confidence,
       type: detectType(stem),
       slug: slugOf(stem),
+      num: null,
     };
   });
+
+  // 同科目同章节的编号接着往下排
+  const counters = new Map();
+  for (const it of items) {
+    const sub = it.subject || UNCLASSIFIED;
+    if (!counters.has(sub)) counters.set(sub, new Map());
+    const byChapter = counters.get(sub);
+    const ch = it.chapter || sub;
+    if (!byChapter.has(ch)) byChapter.set(ch, nextNumberFor(cfg.notebookDir, it.category, sub, ch));
+    it.num = byChapter.get(ch);
+    byChapter.set(ch, it.num + 1);
+  }
   return { items, count: items.length, mode };
 }
 
@@ -144,8 +164,11 @@ export function addQuestions(cfg, items) {
 }
 
 /** 生成给 AI 用的提示词 */
-export function promptFor(cfg, stems, chapterHint) {
-  return { prompt: buildPrompt(Array.isArray(stems) ? stems : [stems], { chapterHint }) };
+export function promptFor(cfg, stems, scope = {}) {
+  return {
+    prompt: buildPrompt(Array.isArray(stems) ? stems : [stems], scope),
+    options: chapterOptions(),
+  };
 }
 
 /** 导出机器可读 JSON + 人类可读 Markdown 汇总 */
@@ -160,6 +183,8 @@ export function exportAll(cfg) {
     questions: snap.problems.map((p) => ({
       id: p.id,
       num: p.num,
+      category: p.category,
+      subject: p.subject,
       chapter: p.chapter,
       title: p.title,
       expr: p.expr,
@@ -204,14 +229,24 @@ function renderMarkdownReport(snap) {
   L.push(`| 累计打卡 | ${t.checkins} 次（完美 ${t.byResult['完美']} / 普通 ${t.byResult['普通']} / 失败 ${t.byResult['失败']}） |`);
   L.push(`| 连续打卡 | ${t.streak} 天 |`);
   L.push('');
+  L.push(`## 分科目情况`);
+  L.push('');
+  L.push(`| 大类 | 科目 | 题数 | 完成 | 完成率 |`);
+  L.push(`| --- | --- | --- | --- | --- |`);
+  for (const cat of stats.tree) {
+    for (const sub of cat.subjects) {
+      L.push(`| ${cat.name} | ${sub.name} | ${sub.total} | ${sub.done} | ${sub.rate}% |`);
+    }
+  }
+  L.push('');
   L.push(`## 逐题明细`);
   L.push('');
-  L.push(`| 题目 | 章节 | 类型 | 难度 | 热度 | 完美 | 普通 | 失败 | 状态 | 最近一次 |`);
-  L.push(`| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`);
+  L.push(`| 题目 | 大类 | 科目 | 章节 | 类型 | 难度 | 热度 | 完美 | 普通 | 失败 | 状态 | 最近一次 |`);
+  L.push(`| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`);
   for (const p of problems) {
     const s = p.stats;
     L.push(
-      `| ${p.num} | ${p.chapter} | ${p.type} | ${'⭐'.repeat(p.difficulty)} | ${'🔥'.repeat(p.heat)} | ${s.perfect} | ${s.normal} | ${s.fail} | ${s.status} | ${
+      `| ${p.num} | ${p.category} | ${p.subject} | ${p.chapter} | ${p.type} | ${'⭐'.repeat(p.difficulty)} | ${'🔥'.repeat(p.heat)} | ${s.perfect} | ${s.normal} | ${s.fail} | ${s.status} | ${
         s.last ? `${s.last.result} ${s.last.date || ''}` : '—'
       } |`
     );
@@ -220,11 +255,11 @@ function renderMarkdownReport(snap) {
   L.push(`## 待复习（按优先级）`);
   L.push('');
   for (const p of stats.pending.slice(0, 20)) {
-    L.push(`- **${p.num}**　${'🔥'.repeat(p.heat)}　${p.type}　— 已打卡 ${p.stats.total} 次`);
+    L.push(`- **${p.subject} · ${p.num}**　${'🔥'.repeat(p.heat)}　${p.type}　— 已打卡 ${p.stats.total} 次`);
   }
   if (!stats.pending.length) L.push('- 全部完成 🎉');
   L.push('');
-  L.push(`## 数一热度分布`);
+  L.push(`## 考研热度分布`);
   L.push('');
   for (const row of [...stats.byHeat].reverse()) {
     if (!row.total) continue;
