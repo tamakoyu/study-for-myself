@@ -200,6 +200,24 @@ check('详情抽屉：折叠块默认收起', folds >= 4 && opened === 0, `${fol
 await s.shot('04-drawer');
 await s.click('[data-close-drawer]');
 
+/* ---------- 5.5 考点标签 ---------- */
+await s.click('.problem-card');
+await s.waitFor('#drawerPanel .points-panel');
+const pts = await s.js(
+  `return [...document.querySelectorAll('#drawerPanel .point-chip')].map(x=>x.firstChild.textContent.trim());`
+);
+check('详情：显示考点标签', pts.length > 0, pts.join(' / '));
+await s.js(
+  `var i=document.getElementById('pointInput'); i.value='E2E测试考点';
+   i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));`
+);
+await sleep(1400);
+const pts2 = await s.js(
+  `return [...document.querySelectorAll('#drawerPanel .point-chip')].map(x=>x.firstChild.textContent.trim());`
+);
+check('详情：回车能新增考点标签', pts2.includes('E2E测试考点'), pts2.join(' / '));
+await s.click('[data-close-drawer]');
+
 /* ---------- 6. 复习：换范围 + 混刷 ---------- */
 await s.js(`document.querySelector('.tab[data-view="review"]').click();`);
 await s.waitFor('.rv-setup');
@@ -273,7 +291,29 @@ check('复习：逐题结果 5 行', rows === 5, `${rows} 行`);
 await s.shot('08-review-done');
 
 const apiStats = await (await fetch(`${APP}/api/stats`)).json();
-check('复习：打卡确实写回文件', apiStats.totals.checkins === 5, `累计打卡 ${apiStats.totals.checkins} 次`);
+// 本局 5 次 + 预置的那 1 次（用来制造「遗忘曲线到期」）
+check('复习：打卡确实写回文件', apiStats.totals.checkins === 6, `累计打卡 ${apiStats.totals.checkins} 次`);
+
+/* ---------- 6.5 遗忘曲线 + 用时分析 ---------- */
+const detail = await (await fetch(`${APP}/api/stats`)).json();
+check(
+  '遗忘曲线：刚做完完美的题进入「完成」并排了下一次',
+  detail.totals.done >= 1,
+  `完成 ${detail.totals.done} 题`
+);
+
+await s.js(`document.querySelector('.tab[data-view="dashboard"]').click();`);
+await sleep(1200);
+const duePanel = await s.js(
+  `return [...document.querySelectorAll('.panel-head h3')].map(x=>x.textContent.trim()).join(' | ');`
+);
+check('总览：出现「遗忘曲线提醒」面板（测试数据里有到期的题）', duePanel.includes('遗忘曲线提醒'), duePanel.slice(0, 120));
+check('总览：出现「考点薄弱排行」面板', duePanel.includes('考点薄弱排行'));
+await s.shot('11-insights');
+
+const q1 = await (await fetch(`${APP}/api/questions`)).json();
+const timed = q1.problems.find((p) => p.checkins.some((c) => c.done && c.seconds > 0));
+check('用时：打卡记录带上了秒数', !!timed, timed ? `${timed.num} → ${timed.checkins.find((c) => c.seconds > 0).seconds}s` : '没找到');
 
 /* ---------- 7. 增题页 ---------- */
 await s.js(`document.querySelector('.tab[data-view="add"]').click();`);

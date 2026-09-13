@@ -129,19 +129,23 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 2. **格式不对就只读不写。** 缺 `## 打卡记录`、frontmatter 缺字段的笔记会在界面标黄，并拒绝为它打卡。
 3. **写入前先备份。**
 
-## 打卡规则
+## 打卡规则与遗忘曲线
 
-| 结果 | 含义 | 题目状态 |
+| 结果 | 含义 | 之后会怎样 |
 | --- | --- | --- |
-| ✅ 完美 | 独立做对、思路清楚 | **复习完成** |
-| 🟡 普通 | 做出来了但不顺 | 待复习 |
-| ❌ 失败 | 没做出来 / 做错 | 待复习 |
+| ✅ 完美 | 独立做对、思路清楚 | 进入遗忘曲线排期 |
+| 🟡 普通 | 做出来了但不顺 | 仍待复习 |
+| ❌ 失败 | 没做出来 / 做错 | 仍待复习，并打回第 1 级间隔 |
 
-记录写回 Markdown 的格式：
+**遗忘曲线**：每做到一次「完美」就升一级，间隔按 **1 → 2 → 4 → 7 → 15 → 30 天** 拉长。
+到了间隔日，这道题会自动变成 **⏰ 该复习了** 并回到复习队列 —— 所以「做过了」不等于「不用再做了」。
+最近一次若不是完美，就从那一次重新起算：普通退一级，失败直接打回第 1 级（明天再来）。
+
+记录写回 Markdown 的格式（日期与用时都会自动带上，后两段可省略）：
 
 ```markdown
-- [x] 第 1 次 · 失败 · 2026-09-13
-- [x] 第 2 次 · 完美 · 2026-09-14
+- [x] 第 1 次 · 失败 · 2026-09-13 · 245s
+- [x] 第 2 次 · 完美 · 2026-09-14 · 192s
 
 - [ ] 第 3 次 · 完美
 - [ ] 第 3 次 · 普通
@@ -155,6 +159,33 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 
 ---
 
+## 考点标签
+
+文件夹级的「章节」太粗。每道题还能打**细考点标签**（如「等价无穷小」「夹逼准则」「左右极限」），
+存在 frontmatter 的 `points:` 里：
+
+```yaml
+points:
+  - 1的无穷大型
+  - 幂指函数极限
+  - 等价无穷小
+```
+
+- 详情页可以加 / 删标签（输入框有全库补全，回车确认）
+- 题库左侧可**按考点筛选**
+- 总览里的 **🏷️ 考点薄弱排行** 按累计失败次数排序，直接告诉你该专项突破哪一类
+
+> 同一套标签要**跨题复用**（都写「等价无穷小」），统计才有意义。
+
+## 用时分析
+
+复习时每题都记了用时（详情页一打开就计时，复习模式按每题单独计），写进打卡记录末尾的 `192s`。
+
+总览里的 **⏱️ 做得慢的题** 会挑出「做对了但明显比别人慢」的题 ——
+以全库中位数为基准，超过 1.5 倍就算慢。**这类题比不会的题更容易抢分。**
+
+---
+
 ## HTTP 接口
 
 程序跑着的时候可以直接读，也可以被别的脚本调用：
@@ -163,9 +194,10 @@ NOTEBOOK_DIR=/tmp/另一份错题本 NOTEBOOK_PORT=4199 node server.mjs --no-ope
 GET   /api/health                               自检
 GET   /api/questions                            全部题目 + 导航树 + 全局统计
 GET   /api/stats?category=&subject=&chapter=    某范围的统计
-POST  /api/checkin      { id, result, date? }
+POST  /api/checkin      { id, result, date?, seconds? }
 POST  /api/undo         { id, attempt, result }
 PATCH /api/question     { id, difficulty?, heat?, type? }
+POST  /api/points       { id, points[] }                 改考点标签
 POST  /api/detect       { raw, mode }           识别粘贴的题干，不写盘
 POST  /api/new          { items }               批量建题（写盘）
 POST  /api/prompt       { stems, category?, subject?, chapter? }   生成给 AI 的提示词
@@ -193,7 +225,7 @@ POST  /api/export                               导出 questions.json 与 stats.
 │   ├── markdown.js         极简 Markdown + LaTeX 渲染
 │   └── vendor/katex/       离线内置的 KaTeX（含字体）
 ├── scripts/migrate.mjs     一次性迁移脚本（旧结构 → 三级结构）
-├── test/e2e.mjs            无头浏览器端到端测试（30 项断言）
+├── test/e2e.mjs            无头浏览器端到端测试（38 项断言）
 ├── backups/                自动备份（不入库）
 └── data/                   导出（不入库）
 ```
@@ -212,8 +244,8 @@ NOTEBOOK_DIR=/tmp/notebook-test NOTEBOOK_PORT=4199 node server.mjs --no-open &
 node test/e2e.mjs          # 截图输出到 /tmp/e2e-*.png
 ```
 
-覆盖：四层总览下钻、范围条联动、题库筛选与抽屉、复习换范围/混刷/章节多选/
-键盘流/成绩单/打卡写回、增题识别与落盘、深浅色主题。
+覆盖：四层总览下钻、顶栏范围选择器、题库筛选与抽屉、考点标签增删、复习换范围/混刷/
+章节多选/键盘流/成绩单/打卡写回、遗忘曲线提醒、用时记录、增题识别与落盘、深浅色主题。
 
 ## 手机上用
 

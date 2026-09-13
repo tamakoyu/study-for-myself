@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, exportAll, APP_DIR } from './lib/notebook.mjs';
+import { loadConfig, snapshot, scoped, scopeFromUrl, checkin, undo, updateMeta, updatePoints, exportAll, APP_DIR } from './lib/notebook.mjs';
 import { detect as detectItems, addQuestions, promptFor } from './lib/notebook.mjs';
 import { chapterOptions } from './lib/create.mjs';
 import { RESULTS } from './lib/parse.mjs';
@@ -183,7 +183,14 @@ async function main() {
 
       if (p === '/api/checkin' && req.method === 'POST') {
         const body = await readBody(req);
-        const out = checkin(cfg, body.id, body.result, body.date);
+        const out = checkin(cfg, body.id, body.result, body.date, body.seconds);
+        sendJson(res, 200, out);
+        return;
+      }
+
+      if (p === '/api/points' && req.method === 'POST') {
+        const body = await readBody(req);
+        const out = updatePoints(cfg, body.id, body.points);
         sendJson(res, 200, out);
         return;
       }

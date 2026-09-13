@@ -23,8 +23,29 @@ const SKIP_PREFIX = ['00-'];
 const NOTE_TAGS = ['错题本', '高数错题本'];
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+/** 打卡记录：- [x] 第 1 次 · 完美 · 2026-09-13 · 192s   （日期与用时都可省略） */
 const CHECKIN_RE =
-  /^-\s*\[([ xX])\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*(?:·\s*(\d{4}-\d{2}-\d{2}))?\s*$/;
+  /^-\s*\[([ xX])\]\s*第\s*(\d+)\s*次\s*·\s*(完美|普通|失败)\s*(?:·\s*(\d{4}-\d{2}-\d{2}))?\s*(?:·\s*(\d+)\s*s)?\s*$/;
+
+/** 遗忘曲线：第 n 次做到「完美」之后，隔多少天该重做一遍 */
+export const REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30];
+
+/* ---------------- 日期小工具（本地时区，避免 UTC 偏移） ---------------- */
+export function today(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+export function addDays(dateStr, n) {
+  const [y, m, d] = String(dateStr).split('-').map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  return today(dt);
+}
+/** b - a，单位天 */
+export function daysBetween(a, b) {
+  const [ay, am, ad] = String(a).split('-').map(Number);
+  const [by, bm, bd] = String(b).split('-').map(Number);
+  return Math.round((new Date(by, bm - 1, bd) - new Date(ay, am - 1, ad)) / 86400000);
+}
 
 /** 数一个字符串里某个字符（含 emoji 码点）出现了几次 */
 function countChar(str, ch) {
@@ -142,6 +163,7 @@ function parseCheckins(text) {
       attempt: Number(m[2]),
       result: m[3],
       date: m[4] || null,
+      seconds: m[5] ? Number(m[5]) : null,
       line: i,
       raw: line,
     });
@@ -149,26 +171,71 @@ function parseCheckins(text) {
   return items;
 }
 
-/** 打卡记录 → 统计 */
-export function summarize(checkins) {
+/** 打卡记录 → 统计 + 遗忘曲线排期 */
+export function summarize(checkins, nowStr = today()) {
   const done = (checkins || []).filter((c) => c.done);
   const count = (r) => done.filter((c) => c.result === r).length;
   const perfect = count('完美');
   const normal = count('普通');
   const fail = count('失败');
-  const sorted = [...done].sort((a, b) => {
+
+  const byDate = (a, b) => {
     if (a.date && b.date && a.date !== b.date) return a.date < b.date ? -1 : 1;
     if (a.attempt !== b.attempt) return a.attempt - b.attempt;
     return RESULTS.indexOf(a.result) - RESULTS.indexOf(b.result);
-  });
+  };
+  const sorted = [...done].sort(byDate);
   const last = sorted.length ? sorted[sorted.length - 1] : null;
+  const dated = sorted.filter((c) => c.date);
+  const lastDated = dated.length ? dated[dated.length - 1] : null;
+
+  // ── 遗忘曲线 ──
+  // 每做到一次「完美」就升一级，间隔按 1/2/4/7/15/30 天拉长。
+  // 最近一次若不是完美，就从那一次重新起算，并且退一级（失败直接打回第 1 级）。
+  let schedule = null;
+  const perfects = done.filter((c) => c.result === '完美' && c.date).sort(byDate);
+  if (perfects.length) {
+    const lastPerfect = perfects[perfects.length - 1];
+    let level = Math.min(perfects.length - 1, REVIEW_INTERVALS.length - 1);
+    let base = lastPerfect.date;
+
+    if (lastDated && lastDated.result !== '完美' && lastDated.date >= lastPerfect.date) {
+      level = lastDated.result === '失败' ? 0 : Math.max(0, level - 1);
+      base = lastDated.date;
+    }
+
+    const interval = REVIEW_INTERVALS[level];
+    const due = addDays(base, interval);
+    const overdue = daysBetween(due, nowStr); // >0 已过期，=0 今天到期，<0 还没到
+    schedule = {
+      level: perfects.length,
+      interval,
+      base,
+      lastPerfectDate: lastPerfect.date,
+      due,
+      overdue,
+      isDue: overdue >= 0,
+    };
+  }
+
+  const status = perfect === 0 ? (done.length ? '进行中' : '未做') : schedule.isDue ? '到期' : '完成';
+
+  // ── 用时 ──
+  const secs = done.map((c) => c.seconds).filter((n) => typeof n === 'number' && n > 0);
+  const totalSec = secs.reduce((s, n) => s + n, 0);
+
   return {
     perfect,
     normal,
     fail,
     total: done.length,
-    status: perfect > 0 ? '完成' : done.length > 0 ? '进行中' : '未做',
+    status,
+    schedule,
     last: last ? { result: last.result, date: last.date, attempt: last.attempt } : null,
+    timedCount: secs.length,
+    avgSec: secs.length ? Math.round(totalSec / secs.length) : null,
+    lastSec: secs.length ? secs[secs.length - 1] : null,
+    totalSec,
   };
 }
 
@@ -240,6 +307,7 @@ export function parseNote(absPath, rootDir) {
     heat: countChar(heatRaw, '🔥'),
     difficultyRaw,
     heatRaw,
+    points: Array.isArray(fm.data.points) ? fm.data.points.filter(Boolean) : fm.data.points ? [fm.data.points] : [],
     profile,
     keypoints: profileCallouts[0]?.body || '',
     stem: get('题干').trim(),
@@ -251,7 +319,17 @@ export function parseNote(absPath, rootDir) {
     warnings,
   };
   note.stats = summarize(checkins);
-  note.searchText = [note.num, note.category, note.subject, note.chapter, note.title, note.type, note.keypoints, note.stem]
+  note.searchText = [
+    note.num,
+    note.category,
+    note.subject,
+    note.chapter,
+    note.title,
+    note.type,
+    note.points.join(' '),
+    note.keypoints,
+    note.stem,
+  ]
     .join(' ')
     .replace(/\s+/g, ' ');
   return note;

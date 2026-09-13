@@ -7,7 +7,7 @@
  */
 
 import { RESULTS } from './parse.mjs';
-import { today } from './write.mjs';
+import { today } from './parse.mjs';
 
 const STATUS_LABEL = { 完成: '✅ 复习完成', 进行中: '⏳ 待复习·做过', 未做: '⏳ 待复习·未做' };
 
@@ -15,9 +15,11 @@ export function statusLabel(status) {
   return STATUS_LABEL[status] || status;
 }
 
-/** 复习优先级：热度权重最高，其次难度，再减去已打卡次数 */
+/** 复习优先级：到期最优先，其次热度、难度、失败次数 */
 export function priorityOf(p) {
-  return p.heat * 2 + p.difficulty - p.stats.total * 0.5 + (p.stats.fail > 0 ? 1.5 : 0);
+  const overdue =
+    p.stats.status === '到期' ? 3 + Math.min(p.stats.schedule?.overdue || 0, 14) * 0.2 : 0;
+  return p.heat * 2 + p.difficulty - p.stats.total * 0.5 + (p.stats.fail > 0 ? 1.5 : 0) + overdue;
 }
 
 /** 按范围筛题。scope 里没给的层级表示不限 */
@@ -122,12 +124,71 @@ export function computeStats(problems, tree = []) {
     byHeat: groupCount(problems, (p) => p.heat, [1, 2, 3, 4, 5]),
     byDifficulty: groupCount(problems, (p) => p.difficulty, [1, 2, 3, 4, 5]),
     byType: groupCount(problems, (p) => p.type, [...new Set(problems.map((p) => p.type))]),
+    byPoint: pointStats(problems),
+    timing: timingStats(problems),
+    due: problems
+      .filter((p) => p.stats.status === '到期')
+      .sort((a, b) => b.stats.schedule.overdue - a.stats.schedule.overdue)
+      .map(slim),
     // 大类 / 科目的地板数据（含 0 题的科目），给导航和上层总览用
     tree: tree.map((cat) => ({ ...share(cat), subjects: cat.children.map(share) })),
     trend,
     pending: pending.map(slim),
     troubled: troubled.map(slim),
     recent: recent.map((c) => ({ ...c })),
+  };
+}
+
+/**
+ * 考点标签统计：每个标签下有多少题、其中多少完成、累计失败几次。
+ * 「失败次数」是找薄弱点最直接的信号。
+ */
+function pointStats(problems) {
+  const map = new Map();
+  for (const p of problems) {
+    for (const point of p.points || []) {
+      if (!map.has(point)) map.set(point, { key: point, total: 0, done: 0, pending: 0, fail: 0, checkins: 0, ids: [] });
+      const row = map.get(point);
+      row.total += 1;
+      if (p.stats.status === '完成') row.done += 1;
+      else row.pending += 1;
+      row.fail += p.stats.fail;
+      row.checkins += p.stats.total;
+      row.ids.push(p.id);
+    }
+  }
+  const rows = [...map.values()].sort((a, b) => b.fail - a.fail || b.total - a.total);
+  const untagged = problems.filter((p) => !(p.points || []).length).length;
+  return { rows, untagged, taggedCount: rows.length };
+}
+
+/**
+ * 用时分析：找出「做对了但很慢」的题——这类题比不会的题更好拿分。
+ * 以所有有计时记录的题的中位数为基准，超过 1.5 倍中位数就算慢。
+ */
+function timingStats(problems) {
+  const timed = problems.filter((p) => p.stats.avgSec != null);
+  if (!timed.length) {
+    return { timedCount: 0, medianSec: null, avgSec: null, slowThreshold: null, slow: [], fastest: null, totalSec: 0 };
+  }
+  const avgs = timed.map((p) => p.stats.avgSec).sort((a, b) => a - b);
+  const mid = Math.floor(avgs.length / 2);
+  const medianSec = avgs.length % 2 ? avgs[mid] : Math.round((avgs[mid - 1] + avgs[mid]) / 2);
+  const slowThreshold = Math.max(60, Math.round(medianSec * 1.5));
+
+  const slow = timed
+    .filter((p) => p.stats.avgSec >= slowThreshold)
+    .sort((a, b) => b.stats.avgSec - a.stats.avgSec)
+    .map((p) => ({ ...slim(p), avgSec: p.stats.avgSec, lastSec: p.stats.lastSec }));
+
+  return {
+    timedCount: timed.length,
+    medianSec,
+    avgSec: Math.round(avgs.reduce((s, n) => s + n, 0) / avgs.length),
+    slowThreshold,
+    slow,
+    fastest: [...timed].sort((a, b) => a.stats.avgSec - b.stats.avgSec)[0]?.num || null,
+    totalSec: timed.reduce((s, p) => s + p.stats.totalSec, 0),
   };
 }
 
@@ -142,6 +203,7 @@ function slim(p) {
     type: p.type,
     difficulty: p.difficulty,
     heat: p.heat,
+    points: p.points || [],
     stats: p.stats,
     priority: p.priority,
   };

@@ -5,9 +5,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scanNotebook } from './parse.mjs';
+import { scanNotebook, today } from './parse.mjs';
 import { computeStats, filterByScope } from './stats.mjs';
-import { recordCheckin, undoCheckin, setMeta, backup, today } from './write.mjs';
+import { recordCheckin, undoCheckin, setMeta, setPoints, backup } from './write.mjs';
 import { chapterOptions, createQuestions, splitProblems, detect as detectByKeywords, detectType, normalizeMath, slugOf, buildPrompt, nextNumber as nextNumberFor } from './create.mjs';
 import { TAXONOMY, UNCLASSIFIED } from './taxonomy.mjs';
 
@@ -90,13 +90,13 @@ function findProblem(cfg, id) {
   return byId;
 }
 
-export function checkin(cfg, id, result, date) {
+export function checkin(cfg, id, result, date, seconds) {
   const p = findProblem(cfg, id);
   if (p.warnings.some((w) => w.includes('打卡记录'))) {
     throw Object.assign(new Error('该笔记缺少 `## 打卡记录` 区块，为防误写已中止'), { status: 409 });
   }
   backup(p.absPath, cfg.notebookDir, cfg.backupDir);
-  const res = recordCheckin(p.absPath, { result, date });
+  const res = recordCheckin(p.absPath, { result, date, seconds });
   return { ok: true, ...res, problem: findProblem(cfg, id) };
 }
 
@@ -117,6 +117,14 @@ export function updateMeta(cfg, id, patch) {
   backup(p.absPath, cfg.notebookDir, cfg.backupDir);
   setMeta(p.absPath, clean);
   return { ok: true, problem: findProblem(cfg, id) };
+}
+
+/** 改考点标签 */
+export function updatePoints(cfg, id, points) {
+  const p = findProblem(cfg, id);
+  backup(p.absPath, cfg.notebookDir, cfg.backupDir);
+  const res = setPoints(p.absPath, points);
+  return { ok: true, ...res, problem: findProblem(cfg, id) };
 }
 
 /* ---------------- 增题 ---------------- */

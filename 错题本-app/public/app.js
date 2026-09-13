@@ -9,9 +9,11 @@ const state = {
   data: null, // 全量：problems / tree / taxonomy / options
   stats: null, // 当前 scope 的统计
   q: '',
-  filters: { status: null, difficulty: null, heat: null },
+  filters: { status: null, difficulty: null, heat: null, point: null },
   openId: null,
   pickerOpen: false,
+  drawerOpenedAt: 0,
+  drawerTimerId: null,
   review: {
     phase: 'setup', // setup | run | done
     options: { chapters: [], scope: 'pending', order: 'priority', count: 10 },
@@ -31,10 +33,29 @@ const VIEWS = ['dashboard', 'library', 'review', 'add'];
 const PALETTE = ['#6d8cff', '#3fb950', '#e3b341', '#f85149', '#a371f7', '#39c5cf', '#ff8c42'];
 
 const STATUS_META = {
+  到期: { cls: 'badge-due', text: '⏰ 该复习了', cls2: 's-due' },
   完成: { cls: 'badge-done', text: '✅ 复习完成', cls2: 's-done' },
   进行中: { cls: 'badge-start', text: '⏳ 待复习·做过', cls2: 's-start' },
   未做: { cls: 'badge-none', text: '⏳ 待复习·未做', cls2: 's-none' },
 };
+const statusMeta = (s) => STATUS_META[s] || STATUS_META['未做'];
+
+/** 秒 → 「3:12」/「1分20秒」 */
+const fmtSec = (n) => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const s = Math.round(n);
+  if (s < 60) return `${s} 秒`;
+  return `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, '0')} 秒`;
+};
+const fmtClock = (n) => (n == null ? '—' : `${Math.floor(n / 60)}:${String(Math.round(n) % 60).padStart(2, '0')}`);
+
+/** 遗忘曲线排期 → 一句人话 */
+function scheduleText(p) {
+  const sc = p.stats.schedule;
+  if (!sc) return '';
+  if (sc.overdue >= 0) return `已到期 ${sc.overdue === 0 ? '（今天）' : `${sc.overdue} 天`}`;
+  return `${-sc.overdue} 天后（${sc.due}）`;
+}
 
 const RESULTS = [
   { key: '完美', cls: 'r-perfect', icon: '✅', hint: '独立做对' },
@@ -418,6 +439,82 @@ function subjectCards(node) {
     .join('')}</div>`;
 }
 
+/** 遗忘曲线提醒 / 考点薄弱排行 / 慢题——三个「下一步该干什么」的面板 */
+function insightPanels(stats) {
+  const parts = [];
+
+  if (stats.due && stats.due.length) {
+    parts.push(`<section class="panel" style="margin-top:14px">
+      <div class="panel-head"><h3>⏰ 遗忘曲线提醒</h3><span class="hint">做过的题按 1/2/4/7/15/30 天回到队列，这些已到点</span></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>题目</th><th>科目</th><th>章节</th><th>做到完美次数</th><th>当前间隔</th><th>已过期</th></tr></thead>
+        <tbody>${stats.due
+          .map(
+            (p) => `<tr data-open="${esc(p.id)}">
+          <td><b>${esc(p.num)}</b></td>
+          <td style="color:var(--text-3)">${esc(p.subject)}</td>
+          <td>${esc(p.chapter)}</td>
+          <td class="num-cell">${p.stats.schedule.level} 次</td>
+          <td class="num-cell">${p.stats.schedule.interval} 天</td>
+          <td class="num-cell" style="color:var(--warn);font-weight:650">${
+            p.stats.schedule.overdue === 0 ? '今天' : `${p.stats.schedule.overdue} 天`
+          }</td>
+        </tr>`
+          )
+          .join('')}</tbody>
+      </table></div></section>`);
+  }
+
+  const pts = stats.byPoint?.rows || [];
+  if (pts.length) {
+    parts.push(`<section class="panel" style="margin-top:14px">
+      <div class="panel-head"><h3>🏷️ 考点薄弱排行</h3><span class="hint">按累计失败次数排，越靠前越该专项突破${
+        stats.byPoint.untagged ? `　·　还有 ${stats.byPoint.untagged} 题没打考点` : ''
+      }</span></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>考点</th><th>题数</th><th>已完成</th><th>累计失败</th><th>累计打卡</th></tr></thead>
+        <tbody>${pts
+          .slice(0, 14)
+          .map(
+            (r) => `<tr data-point="${esc(r.key)}">
+          <td><span class="point-chip static">${esc(r.key)}</span></td>
+          <td class="num-cell">${r.total}</td>
+          <td class="num-cell">${r.done}</td>
+          <td class="num-cell" style="color:${r.fail ? 'var(--fail)' : 'var(--text-3)'};font-weight:${r.fail ? 650 : 400}">${r.fail}</td>
+          <td class="num-cell">${r.checkins}</td>
+        </tr>`
+          )
+          .join('')}</tbody>
+      </table></div></section>`);
+  }
+
+  const t = stats.timing;
+  if (t && t.slow && t.slow.length) {
+    parts.push(`<section class="panel" style="margin-top:14px">
+      <div class="panel-head"><h3>⏱️ 做得慢的题</h3><span class="hint">会做但耗时明显偏长（中位数 ${fmtSec(
+        t.medianSec
+      )}，超过 ${fmtSec(t.slowThreshold)} 算慢）——这类题最容易抢分</span></div>
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>题目</th><th>科目</th><th>章节</th><th>平均用时</th><th>最近一次</th><th>难度</th><th>状态</th></tr></thead>
+        <tbody>${t.slow
+          .map(
+            (p) => `<tr data-open="${esc(p.id)}">
+          <td><b>${esc(p.num)}</b></td>
+          <td style="color:var(--text-3)">${esc(p.subject)}</td>
+          <td>${esc(p.chapter)}</td>
+          <td class="num-cell" style="color:var(--warn);font-weight:650">${fmtSec(p.avgSec)}</td>
+          <td class="num-cell">${fmtSec(p.lastSec)}</td>
+          <td>${stars(p.difficulty)}</td>
+          <td><span class="badge ${statusMeta(p.stats.status).cls}">${statusMeta(p.stats.status).text}</span></td>
+        </tr>`
+          )
+          .join('')}</tbody>
+      </table></div></section>`);
+  }
+
+  return parts.join('');
+}
+
 function renderDashboard() {
   const { tree } = state.data;
   const stats = state.stats;
@@ -445,6 +542,7 @@ function renderDashboard() {
           })
           .join('')}
       </div>
+      ${insightPanels(stats)}
       ${pendingTable(stats)}`;
   }
 
@@ -470,6 +568,7 @@ function renderDashboard() {
       </div>
       <div class="section-title"><h2>${esc(cat.name)} 的科目</h2><span class="hint">点任意科目进入它的总览</span></div>
       ${subjectCards(cat)}
+      ${insightPanels(stats)}
       ${pendingTable(stats)}`;
   }
 
@@ -498,6 +597,7 @@ function renderDashboard() {
         <div class="panel-body">${sparkline(stats.trend)}</div>
       </section>
     </div>
+    ${insightPanels(stats)}
     ${pendingTable(stats, { showWhere: false })}
     ${troubledTable(stats)}`;
 }
@@ -513,6 +613,7 @@ function filteredProblems() {
     if (f.status && p.stats.status !== f.status) return false;
     if (f.difficulty && p.difficulty !== f.difficulty) return false;
     if (f.heat && p.heat !== f.heat) return false;
+    if (f.point && !(p.points || []).includes(f.point)) return false;
     if (q && !p.searchText.toLowerCase().includes(q)) return false;
     return true;
   });
@@ -554,6 +655,18 @@ function renderLibrary() {
       { value: null, text: '全部' },
       ...[5, 4, 3, 2, 1].map((n) => ({ value: n, text: fires(n), count: countIn((p) => p.heat === n) })),
     ], 'heat')}
+    ${
+      allPoints().length
+        ? filterChips('考点标签', [
+            { value: null, text: '全部' },
+            ...allPoints().map((pt) => ({
+              value: pt,
+              text: esc(pt),
+              count: countIn((p) => (p.points || []).includes(pt)),
+            })),
+          ], 'point')
+        : ''
+    }
     <div class="sidebar-foot">
       范围 <b>${esc(scopeName())}</b><br>
       共 <b>${scopedAll.length}</b> 题，筛出 <b>${list.length}</b> 题
@@ -652,10 +765,41 @@ function renderDrawer(id) {
       <span class="meta-item">难度 ${gaugeEditor(p.id, 'difficulty', p.difficulty)}</span>
       <span class="meta-item">考研热度 ${gaugeEditor(p.id, 'heat', p.heat)}</span>
       <span class="meta-item">累计打卡 <b>${p.stats.total}</b> 次</span>
+      ${
+        p.stats.schedule
+          ? `<span class="meta-item">忘记曲线 <b class="${p.stats.schedule.isDue ? 'is-due' : ''}">${esc(
+              scheduleText(p)
+            )}</b></span>`
+          : ''
+      }
+      ${
+        p.stats.avgSec != null
+          ? `<span class="meta-item">平均用时 <b>${fmtSec(p.stats.avgSec)}</b>（${p.stats.timedCount} 次计时）</span>`
+          : ''
+      }
     </div>
 
+    <section class="points-panel">
+      <h4>🏷️ 考点标签　<span class="hint">用来统计你在哪类考点上反复错</span></h4>
+      <div class="points-list" id="pointsList" data-id="${esc(p.id)}">
+        ${(p.points || [])
+          .map(
+            (pt) =>
+              `<span class="point-chip">${esc(pt)}<button data-rm-point="${esc(pt)}" title="移除">×</button></span>`
+          )
+          .join('')}
+        <input class="point-input" id="pointInput" list="pointList" placeholder="${
+          (p.points || []).length ? '再加一个…' : '输入考点后回车，例如「等价无穷小」'
+        }" />
+      </div>
+      <datalist id="pointList">${allPoints()
+        .map((pt) => `<option value="${esc(pt)}"></option>`)
+        .join('')}</datalist>
+    </section>
+
     <section class="checkin-panel">
-      <h4>📌 打卡　<span style="font-weight:400;color:var(--text-3)">做完一次，点一个结果</span></h4>
+      <h4>📌 打卡　<span style="font-weight:400;color:var(--text-3)">做完一次，点一个结果</span>
+        <span class="live-timer" id="liveTimer">本次用时 0:00</span></h4>
       <div class="checkin-actions">
         ${RESULTS.map(
           (r) => `<button class="checkin-btn ${r.cls}" data-checkin="${r.key}" data-id="${esc(p.id)}">
@@ -665,7 +809,7 @@ function renderDrawer(id) {
       <div style="margin-top:14px;color:var(--text-3);font-size:12.5px">
         目前：完美 <b style="color:var(--done)">${p.stats.perfect}</b> ·
         普通 <b style="color:var(--warn)">${p.stats.normal}</b> ·
-        失败 <b style="color:var(--fail)">${p.stats.fail}</b>（勾到「完美」即为复习完成）
+        失败 <b style="color:var(--fail)">${p.stats.fail}</b>（勾到「完美」即进入遗忘曲线）
       </div>
       ${timeline}
     </section>
@@ -682,6 +826,13 @@ function renderDrawer(id) {
   </div>`;
 }
 
+/** 全库出现过的考点标签，给输入框做补全 */
+function allPoints() {
+  const set = new Set();
+  for (const p of state.data?.problems || []) for (const pt of p.points || []) set.add(pt);
+  return [...set].sort((a, b) => a.localeCompare(b, 'zh'));
+}
+
 function openDrawer(id) {
   const html = renderDrawer(id);
   if (!html) return;
@@ -690,7 +841,25 @@ function openDrawer(id) {
   drawer.hidden = false;
   drawer.setAttribute('aria-hidden', 'false');
   state.openId = id;
+  state.drawerOpenedAt = Date.now();
+  startDrawerTimer();
   document.body.style.overflow = 'hidden';
+}
+
+/** 详情页一打开就开始计时，打卡时把这段时长记进笔记 */
+function startDrawerTimer() {
+  stopDrawerTimer();
+  state.drawerTimerId = setInterval(() => {
+    const el = document.getElementById('liveTimer');
+    if (!el) return stopDrawerTimer();
+    el.textContent = `本次用时 ${mmss(Date.now() - state.drawerOpenedAt)}`;
+  }, 500);
+}
+function stopDrawerTimer() {
+  if (state.drawerTimerId) {
+    clearInterval(state.drawerTimerId);
+    state.drawerTimerId = null;
+  }
 }
 
 function closeDrawer() {
@@ -698,6 +867,7 @@ function closeDrawer() {
   drawer.hidden = true;
   drawer.setAttribute('aria-hidden', 'true');
   state.openId = null;
+  stopDrawerTimer();
   document.body.style.overflow = '';
 }
 
@@ -1018,14 +1188,18 @@ async function recordReview(result) {
   if (r.phase !== 'run' || !r.revealed) return;
   const p = currentReviewProblem();
   if (!p) return;
+  const ms = Date.now() - r.questionAt;
   r.results.push({
     id: p.id, num: p.num, subject: p.subject, chapter: p.chapter,
-    difficulty: p.difficulty, heat: p.heat, result, ms: Date.now() - r.questionAt,
+    difficulty: p.difficulty, heat: p.heat, result, ms,
   });
   advanceReview();
   try {
-    await api('/api/checkin', { method: 'POST', body: JSON.stringify({ id: p.id, result }) });
-    toast(`${p.num} → ${result}`, result === '完美' ? 'ok' : '');
+    await api('/api/checkin', {
+      method: 'POST',
+      body: JSON.stringify({ id: p.id, result, seconds: Math.max(1, Math.round(ms / 1000)) }),
+    });
+    toast(`${p.num} → ${result}（${fmtSec(ms / 1000)}）`, result === '完美' ? 'ok' : '');
   } catch (err) {
     toast(`${p.num} 打卡写入失败：${err.message}`, 'err');
   }
@@ -1451,6 +1625,15 @@ function bindEvents() {
     const open = e.target.closest('[data-open]');
     if (open) return openDrawer(open.dataset.open);
 
+    // 点总览里的考点 → 跳到题库并按该考点过滤
+    const ptRow = e.target.closest('[data-point]');
+    if (ptRow) {
+      state.filters = { status: null, difficulty: null, heat: null, point: ptRow.dataset.point };
+      state.q = '';
+      $('#search').value = '';
+      return go({ view: 'library' });
+    }
+
     const fchip = e.target.closest('[data-filter]');
     if (fchip) {
       const key = fchip.dataset.filter;
@@ -1462,7 +1645,7 @@ function bindEvents() {
     }
 
     if (e.target.closest('#resetFilters')) {
-      state.filters = { status: null, difficulty: null, heat: null };
+      state.filters = { status: null, difficulty: null, heat: null, point: null };
       state.q = '';
       $('#search').value = '';
       return render();
@@ -1475,12 +1658,32 @@ function bindEvents() {
     if (c) return doCheckin(c.dataset.id, c.dataset.checkin, c);
     const u = e.target.closest('[data-undo]');
     if (u) return doUndo(u.dataset.id, Number(u.dataset.undo), u.dataset.result);
+    const rm = e.target.closest('[data-rm-point]');
+    if (rm) {
+      const list = document.getElementById('pointsList');
+      const current = [...list.querySelectorAll('.point-chip')]
+        .map((n) => n.firstChild.textContent.trim())
+        .filter((x) => x !== rm.dataset.rmPoint);
+      return doSetPoints(list.dataset.id, current);
+    }
     const g = e.target.closest('.gauge-edit button');
     if (g) {
       const wrap = g.closest('.gauge-edit');
       const idx = [...wrap.querySelectorAll('button')].indexOf(g) + 1;
       return doSetGauge(wrap.dataset.id, wrap.dataset.gauge, idx);
     }
+  });
+
+  // 考点输入框：回车添加
+  $('#drawer').addEventListener('keydown', (e) => {
+    if (e.target.id !== 'pointInput' || e.key !== 'Enter') return;
+    e.preventDefault();
+    const val = e.target.value.trim();
+    if (!val) return;
+    const list = document.getElementById('pointsList');
+    const current = [...list.querySelectorAll('.point-chip')].map((n) => n.firstChild.textContent.trim());
+    if (current.includes(val)) return toast('这个考点已经有了', 'err');
+    return doSetPoints(list.dataset.id, [...current, val]);
   });
 
   document.addEventListener('keydown', (e) => {
@@ -1512,13 +1715,30 @@ function bindEvents() {
 async function doCheckin(id, result, btn) {
   if (btn) btn.disabled = true;
   try {
-    await api('/api/checkin', { method: 'POST', body: JSON.stringify({ id, result }) });
+    // 详情页从打开到点打卡的时长，作为这次做题用时
+    const seconds = state.drawerOpenedAt ? Math.round((Date.now() - state.drawerOpenedAt) / 1000) : null;
+    await api('/api/checkin', {
+      method: 'POST',
+      body: JSON.stringify({ id, result, seconds: seconds && seconds > 3 ? seconds : null }),
+    });
+    state.drawerOpenedAt = Date.now(); // 记完重新计时，方便再练一次
     await reload({ silent: true });
-    toast(`已打卡：${result}`, result === '完美' ? 'ok' : '');
+    toast(`已打卡：${result}${seconds > 3 ? `（用时 ${fmtSec(seconds)}）` : ''}`, result === '完美' ? 'ok' : '');
   } catch (err) {
     toast(`打卡失败：${err.message}`, 'err');
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+/** 保存考点标签 */
+async function doSetPoints(id, points) {
+  try {
+    await api('/api/points', { method: 'POST', body: JSON.stringify({ id, points }) });
+    await reload({ silent: true });
+    toast(points.length ? `考点已更新（${points.length} 个）` : '考点已清空');
+  } catch (err) {
+    toast(`保存考点失败：${err.message}`, 'err');
   }
 }
 
