@@ -1,0 +1,343 @@
+/* ============================================================
+   mobile.css —— 手机做题端（/m）的版式
+
+   这一份**只改版式**，配色、Markdown 渲染、折叠块、卡片这些一律沿用
+   style.css（m.html 里先引入了它）。所以两边看起来是同一套东西，
+   改主题色也只需要改一个地方。
+   ============================================================ */
+
+:root {
+  --mtop-h: 52px;
+  --mtabs-h: 58px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
+body.m-body {
+  font-size: 16px;          /* 手机上 15px 偏小，行距也放开一点 */
+  line-height: 1.72;
+  padding-bottom: calc(var(--mtabs-h) + var(--safe-bottom));
+  overscroll-behavior-y: none;
+}
+
+/* 桌面端 main 是 22px 内边距 + 最大宽度居中；手机上一律贴边 */
+body.m-body main {
+  padding: 12px 14px 26px;
+  max-width: none;
+  margin: 0;
+}
+/* 全屏那一屏：tab 栏收起来，底部位置让给操作条 */
+body.m-body.is-view { padding-bottom: 0; }
+/* 正文要给操作条让出地方。**高度不写死** —— 操作条上有几张缩略图、有没有
+   「上一题/下一题」那一行，高度差着一百多像素，写死的话最后一点内容会被压在条后面。
+   实际高度由 mobile.js 每轮重绘时量好写进 --mbar-h。 */
+body.m-body.is-full main { padding-bottom: calc(var(--mbar-h, 230px) + 18px); }
+/* 自己不带操作条的全屏屏（英语判完之后）—— 别在底下留一大块空白 */
+body.m-body.is-view:not(.is-full) main { padding-bottom: 26px; }
+
+/* 手机上一切都好按 —— 桌面端的 22px 小按钮在手机上点不中 */
+body.m-body button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+body.m-body .btn-primary,
+body.m-body .btn-ghost { min-height: 44px; }
+
+/* 四张统计卡两两并排。
+   桌面端是 minmax(190px, 1fr)，在 390 宽的手机上只放得下一列 —— 四张竖着排
+   会把首屏整个吃掉，「今天的任务」得往下翻半天才看得见。 */
+body.m-body .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+body.m-body .stat-card { padding: 12px 13px; }
+body.m-body .stat-label { font-size: 11.5px; }
+body.m-body .stat-value { font-size: 24px; }
+body.m-body .stat-foot { font-size: 11px; }
+
+/* ---------- 顶栏 ---------- */
+.mtop {
+  position: sticky; top: 0; z-index: 40;
+  padding-top: var(--safe-top);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(160%) blur(12px);
+  border-bottom: 1px solid var(--border-soft);
+}
+.mtop-in {
+  display: flex; align-items: center; gap: 10px;
+  min-height: var(--mtop-h);
+  padding: 0 12px;
+}
+.mtop-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.mtop-title b { font-size: 15px; font-weight: 680; line-height: 1.3; }
+.mtop-title span { color: var(--text-3); font-size: 11.5px; line-height: 1.35; }
+.mtop-back {
+  flex: 0 0 auto; width: 44px; height: 44px; margin-left: -8px;
+  border: 0; background: none; color: var(--text-2);
+  font-size: 20px; line-height: 1; border-radius: 12px;
+}
+.mtop-back:active { background: var(--surface-2); }
+.mtop-tools { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.mtop-tools button {
+  width: 42px; height: 42px; border: 0; border-radius: 12px;
+  background: none; color: var(--text-2); font-size: 17px;
+}
+.mtop-tools button:active { background: var(--surface-2); }
+
+/* 顶栏里的计时器：点一下暂停 / 继续 */
+.mtimer {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  font-size: 13px; font-variant-numeric: tabular-nums; color: var(--text-2);
+  white-space: nowrap;
+}
+.mtimer b { font-weight: 650; color: var(--text); }
+.mtimer.is-paused b { color: var(--text-3); }
+.mtimer b.is-over { color: var(--fail); }
+
+/* ---------- 底部：tab 栏 / 操作条 ---------- */
+.mtabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  display: flex;
+  padding-bottom: var(--safe-bottom);
+  background: color-mix(in srgb, var(--bg-soft) 94%, transparent);
+  backdrop-filter: saturate(160%) blur(12px);
+  border-top: 1px solid var(--border);
+}
+.mtabs[hidden] { display: none; }
+.mtab {
+  flex: 1; min-height: var(--mtabs-h);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  border: 0; background: none; color: var(--text-3); font-size: 11.5px;
+}
+.mtab i { font-style: normal; font-size: 19px; line-height: 1.1; }
+.mtab.is-active { color: var(--accent); }
+
+.mbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  padding: 10px 14px calc(10px + var(--safe-bottom));
+  background: color-mix(in srgb, var(--bg-soft) 94%, transparent);
+  backdrop-filter: saturate(160%) blur(12px);
+  border-top: 1px solid var(--border);
+}
+.mbar[hidden] { display: none; }
+.mbar-row { display: flex; gap: 9px; }
+.mbar-row + .mbar-row { margin-top: 9px; }
+.mbar .btn-primary, .mbar .btn-ghost { padding: 12px 16px; font-size: 15px; }
+.mbar .grow { flex: 1; justify-content: center; }
+.mbar-note { margin-top: 7px; text-align: center; color: var(--text-3); font-size: 12px; }
+
+/* ---------- 拍照区 ---------- */
+.mphoto-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 7px; color: var(--text-3); font-size: 12px;
+}
+.mphoto-head b { color: var(--text-2); font-weight: 600; }
+.mphoto-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.mphoto {
+  position: relative; flex: 0 0 auto;
+  width: 68px; height: 68px; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--surface-2);
+}
+.mphoto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mphoto button {
+  position: absolute; top: 2px; right: 2px;
+  width: 22px; height: 22px; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.62); color: #fff; font-size: 12px; line-height: 1;
+}
+.mphoto-add {
+  flex: 0 0 auto; width: 68px; height: 68px;
+  border: 1px dashed var(--border); border-radius: 10px;
+  background: var(--surface-2); color: var(--text-3); font-size: 22px;
+}
+
+/* ---------- 判分进度 ---------- */
+.mprog {
+  display: flex; align-items: center; gap: 11px;
+  padding: 13px 15px; border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: linear-gradient(180deg, var(--accent-soft), var(--surface) 70%);
+}
+.mprog .spinner { width: 20px; height: 20px; border-width: 2.5px; margin: 0; flex: 0 0 auto; }
+.mprog-txt { font-size: 13px; color: var(--text-2); }
+.mprog-txt b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ---------- 题目卡片 ---------- */
+.mq {
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 15px 15px;
+  margin-bottom: 12px;
+}
+.mq-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px;
+  margin-bottom: 9px;
+}
+.mq-n {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 26px; padding: 0 8px; border-radius: 8px;
+  background: var(--accent-soft); color: var(--accent);
+  font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums;
+}
+.mq-kind { font-size: 12.5px; color: var(--text-2); font-weight: 600; }
+.mq-tag { margin-left: auto; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.mq-body { font-size: 16px; }
+.mq-body .md-p { margin: 9px 0; }
+
+/* 题干里的行间公式很长时别把页面撑宽 */
+body.m-body .math-display { max-width: 100%; padding-bottom: 6px; }
+body.m-body .katex-display { margin: 10px 0; }
+body.m-body .md-img { max-width: 100%; height: auto; border-radius: 10px; }
+body.m-body .table-wrap { margin: 10px 0; -webkit-overflow-scrolling: touch; }
+
+/* 折叠块（答案 / 解析）在手机上要够大好点 */
+body.m-body .fold > summary { padding: 12px 14px; font-size: 14px; min-height: 46px; }
+body.m-body .fold-body { padding: 4px 15px 15px; font-size: 15px; }
+
+/* ---------- 单题成绩 ---------- */
+.mq-score-card {
+  margin-top: 12px; padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft); background: var(--surface-2);
+}
+.mq-score-top {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 14px; font-weight: 640;
+}
+.mq-score-top .num { font-size: 22px; font-variant-numeric: tabular-nums; }
+.mq-score-top .of { color: var(--text-3); font-size: 13px; font-weight: 500; }
+.mq-score-top .verdict { margin-left: auto; font-size: 13px; font-weight: 600; }
+.mq-kv { margin-top: 8px; font-size: 13.5px; color: var(--text-2); }
+.mq-kv + .mq-kv { margin-top: 6px; }
+.mq-kv b { color: var(--text); font-weight: 620; }
+
+/* ---------- 成绩单 ---------- */
+.mcard {
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.mcard-total {
+  display: flex; align-items: baseline; gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.mcard-total .big { font-size: 40px; font-weight: 760; line-height: 1; }
+.mcard-total .of { color: var(--text-3); font-size: 15px; }
+.mcard-total .pct { margin-left: auto; font-size: 26px; font-weight: 700; }
+.mcard-sub { margin-top: 6px; color: var(--text-3); font-size: 12.5px; }
+.mcard-body { margin-top: 12px; font-size: 14px; color: var(--text-2); }
+/* 空的正文块（比如「错因分析」没有公式、渲染预览是空的）不该白占一段间距 */
+.mcard-body:empty { display: none; }
+.mcard-body b { color: var(--text); }
+.mcard-body ul { margin: 6px 0 0; padding-left: 20px; }
+
+/* ---------- 列表行（试卷 / 阅读 / 题） ---------- */
+.mrow {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 13px 14px; margin-bottom: 8px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius);
+  background: var(--surface); color: var(--text); text-align: left;
+  box-shadow: var(--shadow);
+}
+.mrow:active { border-color: var(--accent); }
+.mrow-main { min-width: 0; flex: 1; }
+.mrow-title {
+  font-weight: 620; font-size: 14.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mrow-sub { color: var(--text-3); font-size: 12px; margin-top: 2px; }
+.mrow-go { flex: 0 0 auto; color: var(--text-3); font-size: 17px; }
+
+.msec { margin: 18px 0 9px; display: flex; align-items: baseline; gap: 8px; }
+.msec:first-child { margin-top: 4px; }
+.msec h2 { font-size: 14.5px; letter-spacing: 0.02em; }
+.msec .hint { color: var(--text-3); font-size: 12px; margin-left: auto; }
+
+.mstart { display: flex; gap: 9px; }
+.mstart .btn-primary, .mstart .btn-ghost { flex: 1; justify-content: center; }
+
+.msearch {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 13px; height: 44px; margin-bottom: 10px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+}
+.msearch input {
+  flex: 1; min-width: 0; border: 0; background: none; outline: none;
+  color: var(--text); font-size: 15px; font-family: inherit;
+}
+.msearch span { color: var(--text-3); }
+
+.mchips { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 4px; }
+.mchips .chip { flex: 0 0 auto; min-height: 34px; }
+.mempty { color: var(--text-3); font-size: 13.5px; text-align: center; padding: 26px 0; }
+
+/* 题目列表行：左边一条状态色 */
+.mqrow { position: relative; padding-left: 17px; }
+.mqrow::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  border-radius: var(--radius) 0 0 var(--radius);
+  background: var(--text-3); opacity: 0.6;
+}
+.mqrow.s-due::before { background: var(--warn); }
+.mqrow.s-done::before { background: var(--done); }
+.mqrow.s-none::before { background: var(--border); }
+.mqrow-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.mbadge {
+  padding: 2px 8px; border-radius: 999px; font-size: 11px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-3);
+}
+.mbadge.is-due { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.mbadge.is-done { color: var(--done); border-color: color-mix(in srgb, var(--done) 40%, var(--border)); }
+.mbadge.is-fail { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 40%, var(--border)); }
+
+/* ---------- 英语：原文 / 题目 两页签 ---------- */
+.mseg {
+  display: flex; gap: 4px; padding: 4px;
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+  border-radius: 12px; margin-bottom: 12px;
+}
+.mseg button {
+  flex: 1; min-height: 38px; border: 0; border-radius: 9px;
+  background: none; color: var(--text-3); font-size: 14px; font-weight: 600;
+}
+.mseg button.is-on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+.mopts { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.mopt {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 12px 13px; min-height: 48px; text-align: left;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface-2); color: var(--text); font-size: 15px; line-height: 1.5;
+}
+.mopt.is-on { border-color: var(--accent); background: var(--accent-soft); }
+.mopt.is-right { border-color: var(--done); background: var(--done-soft); }
+.mopt.is-wrong { border-color: var(--fail); background: var(--fail-soft); }
+.mopt-key {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  background: var(--surface-3); color: var(--text-2);
+}
+.mopt.is-on .mopt-key { background: var(--accent); color: #fff; }
+.mopt.is-right .mopt-key { background: var(--done); color: #fff; }
+.mopt.is-wrong .mopt-key { background: var(--fail); color: #fff; }
+
+.mreading { font-size: 16.5px; }
+.mreading .md-p { margin: 12px 0; }
+.mword { color: var(--accent); font-weight: 620; }
+
+/* ---------- 全屏看大图 ---------- */
+.mzoom {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(14px + var(--safe-top)) 14px calc(14px + var(--safe-bottom));
+}
+.mzoom[hidden] { display: none; }
+.mzoom img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+/* 手机上的浮层提示要避开底部条 */
+body.m-body .toast-stack { bottom: calc(var(--mtabs-h) + var(--safe-bottom) + 16px); z-index: 120; }
+body.m-body.is-full .toast-stack { bottom: calc(var(--mbar-h, 230px) + var(--safe-bottom) + 16px); }
+body.m-body .toast { max-width: 88vw; text-align: center; }

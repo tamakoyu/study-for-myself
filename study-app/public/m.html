@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <!-- viewport-fit=cover：iPhone 的刘海 / 底部横条都留给 CSS 的 safe-area 处理 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e1014" />
+    <!-- 加到主屏幕后按全屏 App 打开（iOS 只在 apple-mobile-web-app-capable 下认） -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="study 做题" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>study 手机 · 做题</title>
+    <!-- 先借桌面端的变量与 Markdown / KaTeX 样式（.md-* / .fold / .callout / .panel …），
+         再用 mobile.css 把版式改成手机的样子 —— 少写一半 CSS，也不会两边长得不一样 -->
+    <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/mobile.css" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📱</text></svg>" />
+  </head>
+  <body class="m-body">
+    <header class="mtop" id="mtop"></header>
+
+    <main id="mmain">
+      <div class="loading"><div class="spinner"></div><p>正在读取…</p></div>
+    </main>
+
+    <!-- 全屏做题时的底部操作条（拍照 / 判分 / 记结果） -->
+    <div class="mbar" id="mbar" hidden></div>
+
+    <nav class="mtabs" id="mtabs">
+      <button class="mtab is-active" data-act="tab" data-tab="today"><i>📅</i><span>今日</span></button>
+      <button class="mtab" data-act="tab" data-tab="drill"><i>✍️</i><span>做题</span></button>
+    </nav>
+
+    <div class="toast-stack" id="toasts"></div>
+
+    <!-- 点开看大图 -->
+    <div class="mzoom" id="mzoom" hidden><img alt="放大查看" /></div>
+
+    <!-- 两个入口分开：拍照走摄像头，相册走选图。iOS 上传 capture 就只剩相机，
+         想从相册挑旧照片就没路了，所以必须两个都给 -->
+    <input type="file" id="camShot" accept="image/*" capture="environment" hidden />
+    <input type="file" id="albumPick" accept="image/*" multiple hidden />
+
+    <script src="/vendor/katex/katex.min.js"></script>
+    <script type="module" src="/mobile.js"></script>
+  </body>
+</html>

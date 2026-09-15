@@ -139,3 +139,35 @@ export function unlinkedProblems(problems, patterns) {
   const linked = new Set(patterns.flatMap((p) => p.related));
   return problems.filter((p) => !linked.has(p.id));
 }
+
+/**
+ * 把模型产出的一份通解写到盘上（只允许写进题型本下，写前备份）。
+ *
+ * 两个护栏，都是真踩过的坑：
+ * 1. **越界一律拒绝** —— 模型偶尔会「顺手」把错题本里的题也重写一遍，那不该由这一步来做。
+ * 2. **不许把已有通解写瘦** —— 归类时它返回的是整份文件的全文，让它整份替换；
+ *    万一它只回了半截（正文丢了、related 少了），字数会明显缩水，这种直接拒收并报出来，
+ *    不然用户精心写的通解就被一次归类悄悄替换掉了。
+ */
+export function writePatternNote(cfg, rel, content) {
+  const clean = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!clean || clean.includes('..')) throw new Error(`路径不合法：${rel}`);
+  const abs = path.resolve(cfg.vaultDir, clean);
+  const root = path.resolve(cfg.patternDir);
+  if (abs !== root && !abs.startsWith(`${root}${path.sep}`)) {
+    throw new Error(`只能写进${path.basename(root)}，拒绝了：${rel}`);
+  }
+  if (path.extname(abs).toLowerCase() !== '.md') throw new Error(`通解只能是 .md：${rel}`);
+  const body = String(content ?? '');
+  if (!/^---\r?\n/.test(body)) throw new Error(`少了 frontmatter（related 就写在这里面）：${rel}`);
+  if (fs.existsSync(abs)) {
+    const old = readText(abs);
+    if (body.length < old.length * 0.6) {
+      throw new Error(`新内容比原来短了一半（${old.length} → ${body.length} 字），像是丢正文，拒收：${rel}`);
+    }
+    backupFile(abs, cfg.vaultDir, cfg.backupDir, 'model');
+  }
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  writeText(abs, body);
+  return { rel: clean, abs, existed: true };
+}

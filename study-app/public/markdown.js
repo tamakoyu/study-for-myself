@@ -58,6 +58,26 @@ export function wikiLink(target, alias) {
   )}">${escapeHtml(text)}</a>`;
 }
 
+/**
+ * 单行文本用的富文本渲染：**行内 LaTeX + 行内 Markdown**，不套 `<p>`。
+ * 考点标签、覆盖范围这种短文本用它 —— 直接 esc() 的话 `$1^\\infty$` 会原样显示成美元符号。
+ */
+export function richInline(text) {
+  const store = [];
+  const stash = (html) => {
+    store.push(html);
+    return `\u0000$${store.length - 1}\u0000`;
+  };
+  let t = String(text ?? '');
+  t = t.replace(/\\\$/g, '\u0001DOLLAR\u0001');
+  t = t.replace(/\$\$([\s\S]+?)\$\$/g, (_m, tex) => stash(renderMath(tex, true)));
+  t = t.replace(/\$([^\n$]+?)\$/g, (_m, tex) => stash(renderMath(tex, false)));
+  let html = inline(t);
+  html = html.replace(/\u0000\$(\d+)\u0000/g, (_m, n) => store[Number(n)] ?? '');
+  html = html.replace(/\u0001DOLLAR\u0001/g, '$');
+  return html;
+}
+
 /** 行内语法：代码 → 粗体 → 斜体 → 链接 → 删除线 → 图片/双链 */
 function inline(text) {
   let t = escapeHtml(text);
@@ -70,6 +90,9 @@ function inline(text) {
   t = t.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target, alias) => wikiLink(target, alias));
   return t;
 }
+
+/** 单行文本用的行内 Markdown（任务标题、卡片摘要这类，不走整篇渲染） */
+export { inline as inlineMd };
 
 const CALLOUT_ICON = {
   note: '🔎', info: 'ℹ️', tip: '💡', success: '✅', question: '❓',

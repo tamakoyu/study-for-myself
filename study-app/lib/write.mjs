@@ -291,6 +291,53 @@ export function setPoints(absPath, points) {
   return { points: list };
 }
 
+/**
+ * 写入 AI 判分给的「错因分析」。
+ *
+ * 只动 `## 错因分析` 这一节，而且**只保留最近一次** ——
+ * 这一节要回答的是「我最近一次到底错在哪」，不是流水账；
+ * 每次练习的结果 / 用时 / 错因，打卡记录里本来就一条不落。
+ *
+ * 没有这一节就整段插到 `## 打卡记录` 之前（和 setReason 一套规矩）。
+ */
+export function setReasonAnalysis(absPath, analysis, stamp = '') {
+  const text = String(analysis || '').trim();
+  if (!text) return { analysis: '' };
+  const head = `> [!note]- 展开 · 最近一次判分${stamp ? `（${String(stamp).slice(0, 10)}）` : ''}`;
+  // callout 里的多行内容每行都要带 `>`，否则 Obsidian 会提前截断
+  const block = [head, ...text.split('\n').map((l) => (l.trim() ? `> ${l}` : '>'))];
+
+  const lines = fs.readFileSync(absPath, 'utf8').split('\n');
+  const range = findSection(lines, '错因分析');
+  const MARK = /^>\s*\[!note\]-\s*展开 · 最近一次判分/;
+
+  if (range) {
+    // 先把上一次的判分块挖掉（从标记行开始，连同它那一整段 callout）
+    const at = lines.findIndex((l, i) => i >= range.start && i < range.end && MARK.test(l));
+    let next = lines.slice();
+    let end = range.end;
+    if (at !== -1) {
+      let cut = at;
+      while (cut < end && /^>/.test(lines[cut])) cut += 1;
+      if (cut < end && lines[cut].trim() === '') cut += 1;
+      next = [...lines.slice(0, at), ...lines.slice(cut)];
+      end = range.end - (cut - at);
+    }
+    // 去掉这一节末尾的空行，再贴上新的一块
+    let tail = end;
+    while (tail - 1 > range.start && next[tail - 1].trim() === '') tail -= 1;
+    next.splice(tail, 0, '', ...block);
+    fs.writeFileSync(absPath, normalizeEof(next), 'utf8');
+    return { analysis: text };
+  }
+
+  const ci = lines.findIndex((l) => l.trim() === '## 打卡记录');
+  const at = ci === -1 ? lines.length : ci;
+  lines.splice(at, 0, '## 错因分析', '', ...block, '');
+  fs.writeFileSync(absPath, normalizeEof(lines), 'utf8');
+  return { analysis: text };
+}
+
 const REASON_SECTION = [
   '## 错因分析',
   '',

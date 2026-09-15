@@ -7,6 +7,14 @@
 # 机器产物，永远不入库
 study-app/.e2e-runtime/
 study-app/.server.log
+# 墨墨 access token：只留本地，绝不入库
+study-app/.maimemo-token
+# 内置 AI 的接口地址 / key：同样只留本地
+study-app/.ai-config.json
+# 模型没按 JSON 返回时留下的原文（排查用，AI_DUMP_RAW=1 才写）
+study-app/.ai-last-raw.txt
+# 自己加的每日一句：私人内容，只留本地
+study-app/quotes.txt
 study-app/backups/
 study-app/data/
 study-app/uploads/

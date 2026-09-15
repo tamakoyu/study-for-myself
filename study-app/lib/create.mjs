@@ -24,6 +24,16 @@ export function normalizeMath(src) {
 export function safeName(s) {
   return (
     String(s || '新题')
+      // 常见的 LaTeX 记号换成能看的字符：万一考点里带了公式，文件名也别出现成 `1^infty`
+      .replace(/\\(infty|infin)\b/g, '∞')
+      .replace(/\\(to|rightarrow)\b/g, '→')
+      .replace(/\\(times)\b/g, '×')
+      .replace(/\\(cdot)\b/g, '·')
+      .replace(/\\(leq|le)\b/g, '≤')
+      .replace(/\\(geq|ge)\b/g, '≥')
+      // 剩下的反斜杠命令去掉命令名，只留正文
+      .replace(/\\[a-zA-Z]+/g, '')
+      .replace(/\$+/g, '')
       .replace(/[/\\:*?"<>|#[\]]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -64,6 +74,8 @@ const HEAT_WORD = { 1: '极少单独考', 2: '低频', 3: '中频', 4: '高频',
 export function renderNote({
   subject, chapter, num, slug, stem, type, difficulty = 3, heat = 3,
   title, reason, kind = 'mistakes', points = [],
+  // 今日测试那道题已经带了标准答案，直接写进去，不用等 AI 二次补
+  answer = '', analysis = '', pitfall = '', keyPoints = '',
 }) {
   const pad = String(num).padStart(2, '0');
   const stars = '⭐'.repeat(difficulty) + '☆'.repeat(5 - difficulty);
@@ -72,6 +84,13 @@ export function renderNote({
   const pointList = (Array.isArray(points) ? points : String(points || '').split(/[、,，;；\s]+/))
     .map((x) => String(x).trim())
     .filter(Boolean);
+  // callout 里的多行内容：每行都要带 `>`，空行写成单独的 `>`，否则 Obsidian 会提前断开
+  const quote = (text) => String(text || '').trim().split('\n').map((l) => (l.trim() ? `> ${l}` : '>')).join('\n');
+  const callout = (icon, label, text, placeholder) =>
+    text && String(text).trim()
+      ? `> [!${icon}]- 展开 · ${label}\n${quote(text)}`
+      : `> [!${icon}]- 展开 · ${label}\n> ⏳ 待补充${placeholder ? `（${placeholder}）` : ''}`;
+
   // 考点标签：写题时定的就先写进去；没有就不写这个键，等 AI 写题时补（新考点该建就建）
   const pointsBlock = pointList.length ? `points:\n${pointList.map((x) => `  - ${x}`).join('\n')}\n` : '';
 
@@ -93,8 +112,7 @@ ${pointsBlock}---
 **难度**　${stars} · ${DIFF_WORD[difficulty] || '中档'}
 **考研热度**　${fires} · ${HEAT_WORD[heat] || '中频'}
 
-> [!note]- 展开 · 核心考点与主要难点
-> ⏳ 待补充
+${callout('note', '核心考点与主要难点', keyPoints, '考点 + 难在哪')}
 
 ## 题干
 
@@ -102,16 +120,13 @@ ${stem}
 
 ## 答案
 
-> [!success]- 展开 · 答案
-> ⏳ 待补充（小题给最终结果；大题要给考场上那种完整标准过程：以「解：」开头、每步写清依据、结尾出结论）
+${callout('success', '答案', answer, '小题给最终结果；大题要给考场上那种完整标准过程：以「解：」开头、每步写清依据、结尾出结论')}
 
 ## 解析
 
-> [!example]- 展开 · 解析
-> ⏳ 待补充（只写思路与易错点，不要重复答案里的过程）
+${callout('example', '解析', analysis, '只写思路与易错点，不要重复答案里的过程')}
 
-> [!warning]- 展开 · 易错提醒
-> ⏳ 待补充
+${callout('warning', '易错提醒', pitfall, '')}
 
 ${kind === 'good' ? '' : `## 错因分析
 
@@ -187,6 +202,10 @@ export function createQuestions(rootDir, items, kind = 'mistakes') {
       reason: item.reason,
       kind,
       points: item.points,
+      answer: item.answer,
+      analysis: item.analysis,
+      pitfall: item.pitfall,
+      keyPoints: item.keyPoints,
     });
     fs.writeFileSync(file, body, 'utf8');
     created.push({

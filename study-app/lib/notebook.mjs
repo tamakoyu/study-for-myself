@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { scanNotebook, buildTree, today } from './parse.mjs';
 import { walkMarkdown } from './vault.mjs';
 import { computeStats, filterByScope } from './stats.mjs';
-import { recordCheckin, undoCheckin, setMeta, setPoints, setReason, backup, ensureCheckinSlots } from './write.mjs';
+import {
+  recordCheckin, undoCheckin, setMeta, setPoints, setReason, setReasonAnalysis, backup, ensureCheckinSlots,
+} from './write.mjs';
 import {
   chapterOptions, createQuestions, splitProblems, detect as detectByKeywords, detectType,
   normalizeMath, slugOf, buildPrompt, buildImagePrompt, nextNumber as nextNumberFor, bookOf,
@@ -19,8 +21,15 @@ import { buildPatternPrompt } from './create.mjs';
 
 export const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+/** config.json 的路径（NOTEBOOK_CONFIG 可覆盖 —— 跑测试时别动真配置） */
+export function configPath() {
+  return process.env.NOTEBOOK_CONFIG
+    ? path.resolve(process.env.NOTEBOOK_CONFIG)
+    : path.join(APP_DIR, 'config.json');
+}
+
 export function loadConfig() {
-  const cfgPath = path.join(APP_DIR, 'config.json');
+  const cfgPath = configPath();
   const defaults = {
     vaultDir: path.resolve(APP_DIR, '..'),
     notebookDir: '错题本',        // 错题本
@@ -29,12 +38,20 @@ export function loadConfig() {
     noteDirs: ['高等数学', '高数上知识前探', '数据结构', '费曼自测清单', '公式本'],  // 笔记目录：原文页、双链跳转
     planDir: '考研',
     reviewDir: '复盘',
+    storyDir: '单词故事',        // 单词故事：拿墨墨的待背词生成的英语短文
+    testDir: '今日测试',         // 今日测试：按今天学的数学/408/笔记出的题
     examDate: '2027-12-18',
+    maimemoCacheSeconds: 90,     // 墨墨接口有频控，读接口的缓存秒数
     backupDir: 'backups',
     exportDir: 'data',
     uploadDir: 'uploads',
+    quotesFile: 'quotes.txt',    // 自己加的每日一句（可选，一行一句 `句子 | 出处`）
     port: 4173,
     host: '127.0.0.1',
+    // 手机访问开关（设置页里那个）。**运行时可以随时开关，不用重启**：
+    // 本机监听一直在，另外单独起一个局域网监听 —— 关掉就是真的不听这个端口了。
+    // 旧配置把 host 写成 "0.0.0.0" 的，等于「开着」（见 server.mjs 里的解析）
+    lanAccess: false,
   };
   const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\s*\/\/.*$/gm, ''));
   let user = {};
@@ -59,14 +76,25 @@ export function loadConfig() {
   cfg.patternDir = inVault(raw.patternDir);
   cfg.planDir = inVault(raw.planDir);
   cfg.reviewDir = inVault(raw.reviewDir);
+  cfg.storyDir = inVault(raw.storyDir);
+  cfg.testDir = inVault(raw.testDir);
   cfg.backupDir = inApp(process.env.BACKUP_DIR || raw.backupDir);
   cfg.exportDir = inApp(process.env.EXPORT_DIR || raw.exportDir);
   cfg.uploadDir = inApp(process.env.UPLOAD_DIR || raw.uploadDir);
+  cfg.quotesFile = inApp(process.env.QUOTES_FILE || raw.quotesFile);
+  // 手机访问开关：config 里**显式**写了就听它的；
+  // 没写、但老配置把 host 写成 "0.0.0.0"，那就等于开着（老写法照旧管用）
+  cfg.lanAccess = user.lanAccess !== undefined ? !!user.lanAccess : raw.host === '0.0.0.0';
+  // 本机那个监听永远只听本机 —— 局域网是**另一个可以随时开关的监听**（见 server.mjs），
+  // 所以这里把老的 0.0.0.0 收成 127.0.0.1，别让两套说法打架
+  cfg.host = raw.host === '0.0.0.0' ? '127.0.0.1' : raw.host || '127.0.0.1';
 
   // 环境变量优先，方便整套指向另一份仓库（做端到端测试用）
   if (process.env.NOTEBOOK_DIR) cfg.notebookDir = path.resolve(process.env.NOTEBOOK_DIR);
   if (process.env.GOOD_DIR) cfg.goodDir = path.resolve(process.env.GOOD_DIR);
   if (process.env.PATTERN_DIR) cfg.patternDir = path.resolve(process.env.PATTERN_DIR);
+  if (process.env.STORY_DIR) cfg.storyDir = path.resolve(process.env.STORY_DIR);
+  if (process.env.TEST_DIR) cfg.testDir = path.resolve(process.env.TEST_DIR);
   if (process.env.NOTEBOOK_PORT) cfg.port = Number(process.env.NOTEBOOK_PORT);
   return cfg;
 }
@@ -123,13 +151,21 @@ function findProblem(cfg, id) {
   return byId;
 }
 
-export function checkin(cfg, id, result, date, seconds, reason) {
+/**
+ * 打卡。
+ * `opts.analysis` —— AI 判分写的错因分析，写进 `## 错因分析`（只留最近一次）。
+ * `opts.setFirstReason` —— 要不要把这次的错因也写进 `**首次错因**`（只在用户勾了的时候）。
+ * 一次调用只备份一次：打卡行、首次错因、错因分析三处一起写，要么都写要么都不写。
+ */
+export function checkin(cfg, id, result, date, seconds, reason, { analysis = '', setFirstReason = false } = {}) {
   const p = findProblem(cfg, id);
   if (p.warnings.some((w) => w.includes('打卡记录'))) {
     throw Object.assign(new Error('该笔记缺少 `## 打卡记录` 区块，为防误写已中止'), { status: 409 });
   }
-  backup(p.absPath, cfg.notebookDir, cfg.backupDir);
+  backup(p.absPath, bookRootOf(cfg, p.kind), cfg.backupDir);
   const res = recordCheckin(p.absPath, { result, date, seconds, reason });
+  if (analysis) setReasonAnalysis(p.absPath, analysis, date || today());
+  if (setFirstReason && reason) setReason(p.absPath, reason);
   return { ok: true, ...res, problem: findProblem(cfg, id) };
 }
 

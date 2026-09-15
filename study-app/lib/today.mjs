@@ -6,6 +6,7 @@
 
 import { scanPlans, weekPlanFor, monthPlanFor } from './plans.mjs';
 import { reviewRelPath } from './reviews.mjs';
+import { quoteOfTheDay, parseExtraQuotes } from './quotes.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -15,6 +16,12 @@ export const todayStr = (d = new Date()) =>
 
 const WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
+/** 'YYYY-MM-DD' → 0–6（周日=0） */
+const weekdayOf = (dateStr) => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).getDay();
+};
+
 /** 天数差（本地日） */
 export function daysBetween(a, b) {
   const [ay, am, ad] = a.split('-').map(Number);
@@ -23,6 +30,16 @@ export function daysBetween(a, b) {
 }
 
 let planCache = { at: 0, data: null, key: '' };
+
+/** 自己在 quotes.txt 里加的句子（一行一句 `句子 | 出处`）；读不到就当没有 */
+export function extraQuotes(cfg) {
+  try {
+    if (!cfg.quotesFile || !fs.existsSync(cfg.quotesFile)) return [];
+    return parseExtraQuotes(fs.readFileSync(cfg.quotesFile, 'utf8'));
+  } catch {
+    return [];
+  }
+}
 
 /** 计划扫描带 3 秒缓存，避免首页每次请求都读 99 个文件 */
 export function plansCached(cfg, force = false) {
@@ -34,9 +51,16 @@ export function plansCached(cfg, force = false) {
   return data;
 }
 
-export function buildToday(cfg, mistakesStats, now = new Date()) {
-  const date = todayStr(now);
-  const month = date.slice(0, 7);
+/**
+ * 首页「今日」的数据。
+ * viewDate 传了某一天（YYYY-MM-DD）就是「看那一周里的那一天」：
+ * 任务列表、复盘状态都换成那天的，倒计时 / 每日一句仍按真正的今天算。
+ */
+export function buildToday(cfg, mistakesStats, now = new Date(), viewDate = null) {
+  const realToday = todayStr(now);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(viewDate || '')) ? String(viewDate) : realToday;
+  const isToday = date === realToday;
+  const month = realToday.slice(0, 7);
   const plans = plansCached(cfg);
 
   const week = weekPlanFor(plans, date);
@@ -47,11 +71,16 @@ export function buildToday(cfg, mistakesStats, now = new Date()) {
   const monthTaskTotal = monthWeeks.reduce((s, p) => s + p.total, 0);
   const monthTaskDone = monthWeeks.reduce((s, p) => s + p.done, 0);
 
-  // 倒数
-  const days = daysBetween(date, cfg.examDate);
+  // 倒数（永远按真正的今天算，看别的日子也不会变成另一天的倒计时）
+  const days = daysBetween(realToday, cfg.examDate);
 
-  // 今日任务：任务文本里写了今天日期的，加上本周未标日期的待办
-  const weekTasks = week ? week.taskGroups.flatMap((g) => g.tasks.map((t) => ({ ...t, group: g.name }))) : [];
+  // 今日任务：任务文本里写了这天日期的，加上每天都要做的
+  // 🔁 每日任务的「完成」按天算 —— 那天那行打卡在不在，跟别的日子无关
+  const weekTasks = week
+    ? week.taskGroups
+        .flatMap((g) => g.tasks.map((t) => ({ ...t, group: g.name })))
+        .map((t) => (t.daily ? { ...t, done: t.checkins.includes(date), doneDate: t.checkins.includes(date) ? date : null } : t))
+    : [];
   const dailyTasks = weekTasks.filter((t) => t.daily);
   const todayTasks = [...weekTasks.filter((t) => t.date === date && !t.daily), ...dailyTasks];
   // 每日任务已经出现在 todayTasks 里了，这里别再列一遍
@@ -67,38 +96,54 @@ export function buildToday(cfg, mistakesStats, now = new Date()) {
   const reviewRel = reviewRelPath(date, plans);
   const reviewExists = fs.existsSync(path.join(cfg.vaultDir, reviewRel));
 
-  // 本周每一天的完成情况（按任务自带的日期聚合）
-  const byDay = {};
-  for (const t of weekTasks) {
-    if (!t.date || t.daily) continue;
-    byDay[t.date] = byDay[t.date] || { total: 0, done: 0 };
-    byDay[t.date].total += 1;
-    if (t.done) byDay[t.date].done += 1;
-  }
-  let weekDays = [];
+  // 本周每一天的完成情况：标了那天的任务，加上每条每日任务（每天都占一个位子）
+  const weekDates = [];
   if (week?.range) {
     const n = daysBetween(week.range.start, week.range.end) + 1;
     for (let i = 0; i < n; i += 1) {
       const [y, m, d] = week.range.start.split('-').map(Number);
-      const dt = new Date(y, m - 1, d + i);
-      const key = todayStr(dt);
-      weekDays.push({
-        date: key,
-        label: `${m}/${d + i}`,
-        weekday: WEEKDAY[dt.getDay()],
-        isToday: key === date,
-        isPast: key < date,
-        total: byDay[key]?.total || 0,
-        done: byDay[key]?.done || 0,
-      });
+      weekDates.push(todayStr(new Date(y, m - 1, d + i)));
     }
   }
+  const byDay = {};
+  for (const key of weekDates) byDay[key] = { total: 0, done: 0 };
+  for (const t of weekTasks) {
+    if (t.daily) {
+      // 每日任务一周 7 个位子：那天打了卡就算当天完成
+      for (const key of weekDates) {
+        byDay[key].total += 1;
+        if (t.checkins.includes(key)) byDay[key].done += 1;
+      }
+      continue;
+    }
+    if (!t.date) continue;
+    byDay[t.date] = byDay[t.date] || { total: 0, done: 0 };
+    byDay[t.date].total += 1;
+    if (t.done) byDay[t.date].done += 1;
+  }
+  const weekDays = weekDates.map((key) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return {
+      date: key,
+      label: `${m}/${d}`,
+      weekday: WEEKDAY[new Date(y, m - 1, d).getDay()],
+      isToday: key === realToday,
+      isViewing: key === date,
+      isPast: key < realToday,
+      total: byDay[key].total,
+      done: byDay[key].done,
+    };
+  });
 
   return {
     date,
-    weekday: WEEKDAY[now.getDay()],
+    weekday: WEEKDAY[weekdayOf(date)],
+    // 在看哪天：今天 / 本周里的某一天（首页点「本周进度」那排就能翻）
+    viewing: { date, realToday, isToday, isFuture: date > realToday },
     month,
     countdown: { examDate: cfg.examDate, days, weeks: Math.floor(days / 7), months: Math.floor(days / 30) },
+    // 每日一句：同一天永远同一句，跨天自动换（看别的日子也还是今天的这句）
+    quote: quoteOfTheDay(realToday, extraQuotes(cfg)),
     week: week
       ? {
           rel: week.rel,
@@ -109,6 +154,8 @@ export function buildToday(cfg, mistakesStats, now = new Date()) {
           total: week.total,
           done: week.done,
           rate: week.rate,
+          // 每日任务的打卡进度：本周该打几次、已经打了几次
+          daily: week.daily,
           days: weekDays,
         }
       : null,
